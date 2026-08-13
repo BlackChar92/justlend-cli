@@ -78,6 +78,26 @@ describe('JSON envelope', () => {
     outputAction({ k: 'v' });
     assert.equal(cap.out.join(''), '', 'side-channel messages must not leak in JSON mode');
   });
+
+  it('recursively redacts backend-issued order credentials in JSON output', () => {
+    outputResult({
+      batch: {
+        id: 'batch-1',
+        access_token: 'access-secret',
+        accessToken: 'access-secret-camel',
+        refund_token: 'refund-secret',
+      },
+      detail: { order_token: 'order-secret', apiKey: 'api-secret' },
+    }, 'Order', true);
+    const payload = JSON.parse(cap.out.join(''));
+    assert.equal(payload.data.batch.id, 'batch-1');
+    assert.equal(payload.data.batch.access_token, '[redacted]');
+    assert.equal(payload.data.batch.accessToken, '[redacted]');
+    assert.equal(payload.data.batch.refund_token, '[redacted]');
+    assert.equal(payload.data.detail.order_token, '[redacted]');
+    assert.equal(payload.data.detail.apiKey, '[redacted]');
+    assert.doesNotMatch(cap.out.join(''), /access-secret|refund-secret|order-secret|api-secret/);
+  });
 });
 
 describe('Quiet mode', () => {
@@ -106,5 +126,28 @@ describe('Quiet mode', () => {
     outputResult({ foo: 'bar' }, 'T', true);
     const payload = JSON.parse(cap.out.join(''));
     assert.deepEqual(payload, { success: true, data: { foo: 'bar' } });
+  });
+});
+
+describe('Terminal output safety', () => {
+  let cap: ReturnType<typeof capture>;
+  beforeEach(() => {
+    cap = capture();
+    setJsonMode(false);
+    setQuietMode(false);
+  });
+  afterEach(() => {
+    cap.restore();
+    setJsonMode(false);
+    setQuietMode(false);
+  });
+
+  it('removes ANSI and C0/C1 controls from human-readable backend fields', () => {
+    outputResult({ state: '\u001b[2Jspoof\u0007' }, 'Order\u001b]0;evil\u0007', false);
+    const rendered = cap.out.join('');
+    // cli-table/chalk may add their own fixed ANSI styling; attacker-provided
+    // erase/title sequences and BEL must not survive.
+    assert.doesNotMatch(rendered, /\u001b\[2J|\u001b\]0;evil|\u0007/);
+    assert.match(rendered, /spoof/);
   });
 });

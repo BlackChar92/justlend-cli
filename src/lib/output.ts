@@ -5,6 +5,24 @@ import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { isJsonMode, isQuietMode } from './error.js';
 
+const SENSITIVE_OUTPUT_KEY = /^(?:access[_-]?token|refund[_-]?token|order[_-]?token|api[_-]?key|authorization|private[_-]?key|mnemonic|secret)$/i;
+
+export function redactSensitiveOutput(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactSensitiveOutput);
+  if (!value || typeof value !== 'object') return value;
+  const result: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    result[key] = SENSITIVE_OUTPUT_KEY.test(key) ? '[redacted]' : redactSensitiveOutput(item);
+  }
+  return result;
+}
+
+export function sanitizeTerminalText(value: unknown): string {
+  return String(value)
+    .replace(/\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\)?)/g, '')
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, ' ');
+}
+
 /**
  * JSON output envelope. All JSON-mode payloads (single result, list, signed tx)
  * are wrapped as `{ success: true, data: ... }` so downstream consumers
@@ -14,7 +32,7 @@ import { isJsonMode, isQuietMode } from './error.js';
  * Inspired by tronprotocol/wallet-cli's standard CLI mode.
  */
 function emitJson(data: unknown): void {
-  process.stdout.write(JSON.stringify({ success: true, data }, null, 2) + '\n');
+  process.stdout.write(JSON.stringify({ success: true, data: redactSensitiveOutput(data) }, null, 2) + '\n');
 }
 
 export function outputResult(
@@ -28,11 +46,12 @@ export function outputResult(
   }
   if (isQuietMode()) return;
 
-  console.log(chalk.bold.green(`\n${title}`));
+  console.log(chalk.bold.green(`\n${sanitizeTerminalText(title)}`));
   const table = new Table();
-  for (const [key, value] of Object.entries(data)) {
+  const redactedData = redactSensitiveOutput(data) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(redactedData)) {
     if (value !== undefined && value !== null) {
-      table.push({ [chalk.cyan(key)]: String(value) });
+      table.push({ [chalk.cyan(sanitizeTerminalText(key))]: sanitizeTerminalText(value) });
     }
   }
   console.log(table.toString());
@@ -50,11 +69,12 @@ export function outputList(
     return;
   }
   if (isQuietMode()) return;
-  console.log(chalk.bold.green(`\n${title}`));
+  console.log(chalk.bold.green(`\n${sanitizeTerminalText(title)}`));
   if (metadata && Object.keys(metadata).length > 0) {
     const meta = new Table();
-    for (const [key, value] of Object.entries(metadata)) {
-      if (value !== undefined && value !== null) meta.push({ [chalk.cyan(key)]: String(value) });
+    const redactedMetadata = redactSensitiveOutput(metadata) as Record<string, unknown>;
+    for (const [key, value] of Object.entries(redactedMetadata)) {
+      if (value !== undefined && value !== null) meta.push({ [chalk.cyan(sanitizeTerminalText(key))]: sanitizeTerminalText(value) });
     }
     console.log(meta.toString());
   }
@@ -62,12 +82,13 @@ export function outputList(
     console.log(chalk.yellow('(empty)\n'));
     return;
   }
-  const head = Object.keys(rows[0]!);
-  const table = new Table({ head: head.map(h => chalk.cyan(h)) });
-  for (const row of rows) {
+  const redactedRows = redactSensitiveOutput(rows) as Record<string, unknown>[];
+  const head = Object.keys(redactedRows[0]!);
+  const table = new Table({ head: head.map(h => chalk.cyan(sanitizeTerminalText(h))) });
+  for (const row of redactedRows) {
     table.push(head.map(h => {
       const v = row[h];
-      return v === undefined || v === null ? '' : String(v);
+      return v === undefined || v === null ? '' : sanitizeTerminalText(v);
     }));
   }
   console.log(table.toString());
@@ -76,7 +97,7 @@ export function outputList(
 
 export function outputInfo(message: string): void {
   if (isJsonMode() || isQuietMode()) return;
-  console.log(chalk.blue(message));
+  console.log(chalk.blue(sanitizeTerminalText(message)));
 }
 
 export function outputAction(details: Record<string, string | number | boolean | undefined>): void {
@@ -84,19 +105,19 @@ export function outputAction(details: Record<string, string | number | boolean |
   console.log(chalk.bold.yellow('\nTransaction Preview'));
   const table = new Table();
   for (const [key, value] of Object.entries(details)) {
-    if (value !== undefined && value !== null) table.push({ [chalk.cyan(key)]: String(value) });
+    if (value !== undefined && value !== null) table.push({ [chalk.cyan(sanitizeTerminalText(key))]: sanitizeTerminalText(value) });
   }
   console.log(table.toString());
 }
 
 export function outputSuccess(message: string): void {
   if (isJsonMode() || isQuietMode()) return;
-  console.log(chalk.green(message));
+  console.log(chalk.green(sanitizeTerminalText(message)));
 }
 
 export function outputWarning(message: string): void {
   if (isJsonMode() || isQuietMode()) return;
-  console.log(chalk.yellow(`⚠ ${message}`));
+  console.log(chalk.yellow(`⚠ ${sanitizeTerminalText(message)}`));
 }
 
 export function requireExplicitWriteConsent(
