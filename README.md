@@ -156,7 +156,9 @@ signed transaction. Public transaction identifiers—not signed transaction payl
 payment. A per-payer intent lock is also created atomically before signing, so concurrent CLI
 processes cannot authorize two payments. The final authoritative quote must exactly match the amount
 shown at confirmation time. Corrupt or unreadable safety state blocks purchases instead of being
-treated as empty. `--no-broadcast` is intentionally rejected for this workflow; use `quote` or
+treated as empty. Risk output distinguishes FullNode `observed`/`included` status from SolidityNode
+`solidified` finality; an RPC error or missing transaction remains unresolved and cannot authorize a
+new signature. `--no-broadcast` is intentionally rejected for this workflow; use `quote` or
 `--dry-run` instead.
 
 ## Safe dry-run examples

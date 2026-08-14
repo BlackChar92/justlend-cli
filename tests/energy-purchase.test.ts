@@ -77,6 +77,8 @@ function harness() {
       extendExpiration: mock.fn(async () => extended),
     },
     trx: {
+      getUnconfirmedTransactionInfo: mock.fn(async () => ({})),
+      getTransactionInfo: mock.fn(async () => ({})),
       getTransaction: mock.fn(async () => null),
     },
   };
@@ -414,6 +416,68 @@ describe('energy direct-purchase client', () => {
     const risks = await client.reconcilePaymentRisks(PAYER);
     assert.equal(risks.length, 1);
     assert.equal(fetchImpl.mock.callCount(), 0);
+  });
+
+  it('records FullNode inclusion before SolidityNode finality', async () => {
+    const { tronWeb } = harness();
+    let solidified = false;
+    tronWeb.trx.getUnconfirmedTransactionInfo = mock.fn(async () => ({
+      id: TX_ID,
+      blockNumber: 100,
+      receipt: { result: 'SUCCESS' },
+    }));
+    tronWeb.trx.getTransactionInfo = mock.fn(async () => solidified ? {
+      id: TX_ID,
+      blockNumber: 100,
+      receipt: { result: 'SUCCESS' },
+    } : {});
+    const store = new MemoryRiskStore();
+    const client = new EnergyPurchaseClient({
+      baseUrl: 'https://energy.example',
+      networkFingerprint: 'mainnet-provider',
+      fetch: mock.fn(async () => new Response(JSON.stringify({
+        code: 'wallet_rpc_error',
+        msg: 'retry the same transaction',
+        data: null,
+      }), { status: 502, headers: { 'content-type': 'application/json' } })),
+      tronWeb: tronWeb as any,
+      storage: store,
+    });
+    store.risks.push({
+      payerAddress: PAYER,
+      signedTxId: TX_ID,
+      createdAt: 1,
+      expiresAt: 300001,
+      paymentConfirmed: false,
+      chainStatus: 'unknown',
+      chainExecution: 'unknown',
+      networkFingerprint: `api=${client.baseUrl};provider=mainnet-provider`,
+      signedRequest: {
+        receivers: [RECEIVER], energy: 65000, duration: '1h', payer_address: PAYER,
+        signed_transaction: { txID: TX_ID, raw_data_hex: RAW_HEX, signature: ['aa'], visible: false },
+      },
+    });
+
+    assert.deepEqual(
+      (await client.reconcilePaymentRisks(PAYER)).map(risk => ({
+        paymentConfirmed: risk.paymentConfirmed,
+        chainStatus: risk.chainStatus,
+        chainExecution: risk.chainExecution,
+      })),
+      [{ paymentConfirmed: false, chainStatus: 'included', chainExecution: 'success' }],
+    );
+
+    solidified = true;
+    assert.deepEqual(
+      (await client.reconcilePaymentRisks(PAYER)).map(risk => ({
+        paymentConfirmed: risk.paymentConfirmed,
+        chainStatus: risk.chainStatus,
+        chainExecution: risk.chainExecution,
+      })),
+      [{ paymentConfirmed: true, chainStatus: 'solidified', chainExecution: 'success' }],
+    );
+    assert.equal(tronWeb.trx.getUnconfirmedTransactionInfo.mock.callCount(), 2);
+    assert.equal(tronWeb.trx.getTransactionInfo.mock.callCount(), 2);
   });
 
   it('pins the configured payment address before asking the signer', async () => {

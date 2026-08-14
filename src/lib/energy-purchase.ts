@@ -86,12 +86,18 @@ export interface SignedEnergyPurchaseRequest {
   };
 }
 
+export type EnergyPaymentChainStatus = 'unknown' | 'observed' | 'included' | 'solidified';
+export type EnergyPaymentChainExecution = 'unknown' | 'success' | 'failed';
+
 export interface EnergyPaymentRisk {
   payerAddress: string;
   signedTxId: string;
   createdAt: number;
   expiresAt: number;
   paymentConfirmed: boolean;
+  /** FullNode observation first, followed by SolidityNode finality. */
+  chainStatus?: EnergyPaymentChainStatus;
+  chainExecution?: EnergyPaymentChainExecution;
   networkFingerprint?: string;
   signedRequest?: SignedEnergyPurchaseRequest;
   recoveredOrder?: Record<string, unknown>;
@@ -143,6 +149,10 @@ function parsePaymentRisks(raw: string): EnergyPaymentRisk[] {
       Number.isSafeInteger(candidate.createdAt) && Number(candidate.createdAt) >= 0 &&
       Number.isSafeInteger(candidate.expiresAt) && Number(candidate.expiresAt) >= 0 &&
       typeof candidate.paymentConfirmed === 'boolean' &&
+      (candidate.chainStatus === undefined ||
+        ['unknown', 'observed', 'included', 'solidified'].includes(candidate.chainStatus)) &&
+      (candidate.chainExecution === undefined ||
+        ['unknown', 'success', 'failed'].includes(candidate.chainExecution)) &&
       (candidate.networkFingerprint === undefined ||
         (typeof candidate.networkFingerprint === 'string' && candidate.networkFingerprint.length > 0)) &&
       (candidate.signedRequest === undefined ||
@@ -488,6 +498,27 @@ function normalizeHex(value: unknown): string {
   return typeof value === 'string' ? value.replace(/^0x/i, '').toLowerCase() : '';
 }
 
+interface EnergyTransactionLookup {
+  status: EnergyPaymentChainStatus | 'not_found' | 'unavailable';
+  execution: EnergyPaymentChainExecution;
+}
+
+function transactionExecution(value: any): EnergyPaymentChainExecution {
+  const result = value?.receipt?.result ?? value?.ret?.[0]?.contractRet;
+  if (typeof result !== 'string' || !result.trim()) return 'unknown';
+  return result.toUpperCase() === 'SUCCESS' ? 'success' : 'failed';
+}
+
+function hasTransactionInfo(value: any, txId: string): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const responseId = normalizeHex(value.id);
+  return responseId ? responseId === normalizeHex(txId) : Boolean(value.receipt || value.blockNumber !== undefined);
+}
+
+function isTransactionNotFound(error: unknown): boolean {
+  return String((error as Error)?.message || error).toLowerCase().includes('transaction not found');
+}
+
 function providerFingerprint(tronWeb?: InstanceType<typeof TronWeb>): string {
   const values = [
     (tronWeb?.fullNode as any)?.host,
@@ -741,16 +772,64 @@ export class EnergyPurchaseClient {
     return normalizeSignedTransaction(await input.signTransaction(unsigned), unsigned);
   }
 
-  private async lookupTransaction(txId: string): Promise<'found' | 'not_found' | 'unavailable'> {
-    if (typeof this.tronWeb?.trx?.getTransaction !== 'function') return 'unavailable';
-    try {
-      const transaction = await this.tronWeb.trx.getTransaction(txId) as { txID?: string } | undefined;
-      return transaction?.txID === txId ? 'found' : 'not_found';
-    } catch (error) {
-      return String((error as Error)?.message || error).toLowerCase().includes('transaction not found')
-        ? 'not_found'
-        : 'unavailable';
+  private async lookupTransaction(txId: string): Promise<EnergyTransactionLookup> {
+    const trx = (this.tronWeb as any)?.trx;
+    let attempted = 0;
+    let unavailable = false;
+    let included: EnergyTransactionLookup | null = null;
+
+    if (typeof trx?.getUnconfirmedTransactionInfo === 'function') {
+      attempted += 1;
+      try {
+        const info = await trx.getUnconfirmedTransactionInfo(txId);
+        if (hasTransactionInfo(info, txId)) {
+          included = { status: 'included', execution: transactionExecution(info) };
+        }
+      } catch (error) {
+        if (!isTransactionNotFound(error)) unavailable = true;
+      }
     }
+
+    if (typeof trx?.getTransactionInfo === 'function') {
+      attempted += 1;
+      try {
+        const info = await trx.getTransactionInfo(txId);
+        if (hasTransactionInfo(info, txId)) {
+          return { status: 'solidified', execution: transactionExecution(info) };
+        }
+      } catch (error) {
+        if (!isTransactionNotFound(error)) unavailable = true;
+      }
+    }
+
+    if (included) return included;
+
+    if (typeof trx?.getTransaction === 'function') {
+      attempted += 1;
+      try {
+        const transaction = await trx.getTransaction(txId);
+        if (normalizeHex(transaction?.txID) === normalizeHex(txId)) {
+          const execution = transactionExecution(transaction);
+          return { status: execution === 'unknown' ? 'observed' : 'included', execution };
+        }
+      } catch (error) {
+        if (!isTransactionNotFound(error)) unavailable = true;
+      }
+    }
+
+    return { status: attempted === 0 || unavailable ? 'unavailable' : 'not_found', execution: 'unknown' };
+  }
+
+  private recordChainLookup(risk: EnergyPaymentRisk, lookup: EnergyTransactionLookup): void {
+    if (!['observed', 'included', 'solidified'].includes(lookup.status)) return;
+    const rank: Record<EnergyPaymentChainStatus, number> = { unknown: 0, observed: 1, included: 2, solidified: 3 };
+    if (rank[lookup.status as EnergyPaymentChainStatus] < rank[risk.chainStatus || 'unknown']) return;
+    risk.chainStatus = lookup.status as EnergyPaymentChainStatus;
+    if (lookup.execution !== 'unknown' || !risk.chainExecution) risk.chainExecution = lookup.execution;
+    if (lookup.status === 'solidified' && lookup.execution === 'success') {
+      risk.paymentConfirmed = true;
+    }
+    this.storage.save(risk);
   }
 
   private async pollOrder(orderId: string | number, token?: string, signal?: AbortSignal): Promise<Record<string, any> | null> {
@@ -789,9 +868,13 @@ export class EnergyPurchaseClient {
           this.storage.save(risk);
         } else if (shouldClearSignedRisk(typed)) {
           this.storage.remove(payerAddress, risk.signedTxId);
-        } else if (await this.lookupTransaction(risk.signedTxId) === 'found') {
-          risk.paymentConfirmed = true;
-          this.storage.save(risk);
+        } else {
+          const lookup = await this.lookupTransaction(risk.signedTxId);
+          if (lookup.status === 'solidified' && lookup.execution === 'failed' && !risk.paymentConfirmed) {
+            this.storage.remove(payerAddress, risk.signedTxId);
+          } else {
+            this.recordChainLookup(risk, lookup);
+          }
         }
       }
     }
@@ -855,9 +938,11 @@ export class EnergyPurchaseClient {
       throw Object.assign(
         new EnergyPurchaseError(
           'PAYMENT_RISK_UNRESOLVED',
-          existing[0]?.paymentConfirmed
-            ? 'A previous payment was recovered. Record its order result and resolve the marker before attempting another payment.'
-            : 'A previous payment has an unknown result. Reconcile the exact signed request before attempting another payment.',
+          existing[0]?.chainStatus === 'included' || existing[0]?.chainStatus === 'observed'
+            ? 'A previous payment is visible on FullNode but is not solidified. Do not sign another payment.'
+            : existing[0]?.paymentConfirmed
+              ? 'A previous payment was recovered or solidified. Record its order result and resolve the marker before attempting another payment.'
+              : 'A previous payment has an unknown result. Reconcile the exact signed request before attempting another payment.',
         ),
         { paymentRisk: existing[0] || existedBeforeReconciliation[0] },
       );
@@ -927,6 +1012,8 @@ export class EnergyPurchaseClient {
       createdAt: this.now(),
       expiresAt: signedDeadline,
       paymentConfirmed: false,
+      chainStatus: 'unknown',
+      chainExecution: 'unknown',
       networkFingerprint: this.networkFingerprint,
       signedRequest,
     };
@@ -962,10 +1049,37 @@ export class EnergyPurchaseClient {
           throw typed;
         }
         if (this.now() >= retryDeadline) {
-          if (await this.lookupTransaction(txId) === 'found') {
-            risk.paymentConfirmed = true;
-            this.storage.save(risk);
-            return { ok: true, orderId: null, txHash: txId, state: 'pending', confirmedOnChain: true };
+          const lookup = await this.lookupTransaction(txId);
+          if (['observed', 'included', 'solidified'].includes(lookup.status)) {
+            if (lookup.status === 'solidified' && lookup.execution === 'failed') {
+              this.storage.remove(input.payerAddress, txId);
+              throw new EnergyPurchaseError(
+                'PAYMENT_FAILED_ON_CHAIN',
+                'The signed payment failed in a solidified block and was not accepted as payment.',
+                { cause: typed, details: { txId, chainStatus: lookup.status, chainExecution: lookup.execution } },
+              );
+            }
+            this.recordChainLookup(risk, lookup);
+            if (lookup.execution === 'failed') {
+              throw Object.assign(
+                new EnergyPurchaseError(
+                  'PAYMENT_RESULT_UNKNOWN',
+                  'FullNode reports a failed execution, but the block is not solidified. Do not sign another payment yet.',
+                  { cause: typed, details: { txId, chainStatus: lookup.status, chainExecution: lookup.execution } },
+                ),
+                { paymentRisk: risk },
+              );
+            }
+            return {
+              ok: true,
+              orderId: null,
+              txHash: txId,
+              state: 'pending',
+              observedOnChain: true,
+              confirmedOnChain: lookup.status === 'solidified',
+              chainStatus: lookup.status,
+              chainExecution: lookup.execution,
+            };
           }
           throw Object.assign(
             new EnergyPurchaseError(

@@ -233,6 +233,8 @@ export function registerEnergyCommands(program: Command): void {
         createdAt: risk.createdAt,
         expiresAt: risk.expiresAt,
         paymentConfirmed: risk.paymentConfirmed,
+        chainStatus: risk.chainStatus || 'unknown',
+        chainExecution: risk.chainExecution || 'unknown',
         networkFingerprint: risk.networkFingerprint,
         replayAvailable: Boolean(risk.signedRequest),
       }));
