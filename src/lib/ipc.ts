@@ -20,18 +20,45 @@ export function getServeDir(): string {
   return SERVE_DIR;
 }
 
+function ensureServeDir(): void {
+  if (!fs.existsSync(SERVE_DIR)) {
+    fs.mkdirSync(SERVE_DIR, { recursive: true, mode: 0o700 });
+  }
+  // This must happen while acquiring the daemon lock, before any await in the
+  // signer startup path. A best-effort chmod leaves a shared-group umask window
+  // in which another local user can plant serve.json as a symlink.
+  const stat = fs.lstatSync(SERVE_DIR);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`Refusing to use an unsafe signer state directory: ${SERVE_DIR}`);
+  }
+  fs.chmodSync(SERVE_DIR, 0o700);
+}
+
 export function createIPCAuthToken(): string {
   return crypto.randomBytes(32).toString('hex');
 }
 
 export function writeServeState(port: number, token = createIPCAuthToken()): string {
-  if (!fs.existsSync(SERVE_DIR)) {
-    fs.mkdirSync(SERVE_DIR, { recursive: true, mode: 0o700 });
-  }
-  try { fs.chmodSync(SERVE_DIR, 0o700); } catch { /* best effort */ }
+  ensureServeDir();
   const state: ServeState = { pid: process.pid, port, startedAt: new Date().toISOString(), token };
-  fs.writeFileSync(SERVE_STATE_FILE, JSON.stringify(state, null, 2), { mode: 0o600 });
-  try { fs.chmodSync(SERVE_STATE_FILE, 0o600); } catch { /* best effort */ }
+  const tempPath = `${SERVE_STATE_FILE}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
+  let descriptor: number | undefined;
+  try {
+    descriptor = fs.openSync(tempPath, 'wx', 0o600);
+    fs.writeFileSync(descriptor, JSON.stringify(state, null, 2));
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    descriptor = undefined;
+    // rename replaces a pre-existing symlink itself rather than following it.
+    fs.renameSync(tempPath, SERVE_STATE_FILE);
+    fs.chmodSync(SERVE_STATE_FILE, 0o600);
+  } catch (error) {
+    if (descriptor !== undefined) {
+      try { fs.closeSync(descriptor); } catch { /* preserve the original error */ }
+    }
+    try { fs.unlinkSync(tempPath); } catch { /* best effort cleanup */ }
+    throw error;
+  }
   return token;
 }
 
@@ -51,9 +78,7 @@ export function clearServeState(): void {
 }
 
 export function acquireServeLock(): (() => void) | null {
-  if (!fs.existsSync(SERVE_DIR)) {
-    fs.mkdirSync(SERVE_DIR, { recursive: true });
-  }
+  ensureServeDir();
   try {
     const fd = fs.openSync(SERVE_LOCK_FILE, 'wx');
     fs.writeSync(fd, String(process.pid));

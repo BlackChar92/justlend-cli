@@ -646,6 +646,9 @@ export class EnergyPurchaseClient {
           ...(options.token ? { 'X-Consumer-Order-Token': options.token } : {}),
         },
         body: options.body === undefined ? undefined : JSON.stringify(options.body),
+        // Order tokens and signed payment payloads must never be forwarded to
+        // a redirect target that was not checked by validateTrustedUrl.
+        redirect: 'error',
         signal,
       });
     } catch (cause) {

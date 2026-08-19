@@ -398,3 +398,19 @@ describe('backport from tronlink-cli: signer version bump', () => {
     assert.equal(pkg.dependencies['tronlink-signer'], '0.1.4');
   });
 });
+
+describe('audit 20260819: local signer state and sensitive API transport', () => {
+  it('hardens the signer state directory before asynchronous startup and atomically replaces state', () => {
+    const source = readFileSync('src/lib/ipc.ts', 'utf8');
+    assert.match(source, /function ensureServeDir\(\): void/);
+    assert.match(source, /fs\.mkdirSync\(SERVE_DIR, \{ recursive: true, mode: 0o700 \}\)/);
+    assert.match(source, /fs\.openSync\(tempPath, 'wx', 0o600\)/);
+    assert.match(source, /fs\.renameSync\(tempPath, SERVE_STATE_FILE\)/);
+    assert.doesNotMatch(source, /fs\.writeFileSync\(SERVE_STATE_FILE,/);
+  });
+
+  it('rejects automatic redirects for energy purchase requests', () => {
+    const source = readFileSync('src/lib/energy-purchase.ts', 'utf8');
+    assert.match(source, /redirect: 'error'/);
+  });
+});
