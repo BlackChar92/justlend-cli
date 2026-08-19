@@ -3,7 +3,7 @@ import { TronSigner } from 'tronlink-signer';
 import { acquireServeLock, clearServeState, getServeDir, startIPCServer, writeServeState } from '../lib/ipc.js';
 import { dispatchSignerCall, initSigner, resolveSignerTimeout, shutdownSigner } from '../lib/signer.js';
 import { getNetworkFromCommand } from '../lib/command-utils.js';
-import { outputResult } from '../lib/output.js';
+import { emitJson, outputResult } from '../lib/output.js';
 
 export function registerDaemonCommands(program: Command): void {
   program
@@ -59,7 +59,7 @@ export function registerDaemonCommands(program: Command): void {
       });
 
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ status: 'running', pid: process.pid, port, dir: getServeDir() }) + '\n');
+        emitJson({ status: 'running', pid: process.pid, port, dir: getServeDir() });
       } else {
         process.stdout.write(`justlend signer daemon running (pid ${process.pid}, port ${port})\nState: ${getServeDir()}\n`);
       }

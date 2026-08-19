@@ -56,7 +56,7 @@ describe('JSON envelope', () => {
   it('outputResult wraps data in {success:true,data:...}', () => {
     outputResult({ foo: 'bar', n: 1 }, 'Title', true);
     const payload = JSON.parse(cap.out.join(''));
-    assert.deepEqual(payload, { success: true, data: { foo: 'bar', n: 1 } });
+    assert.deepEqual(payload, { schemaVersion: '1.0.0', success: true, data: { foo: 'bar', n: 1 } });
   });
 
   it('outputList wraps array in {success:true,data:[...]}', () => {
@@ -69,7 +69,7 @@ describe('JSON envelope', () => {
   it('outputList wraps empty array correctly', () => {
     outputList([], 'Empty', true);
     const payload = JSON.parse(cap.out.join(''));
-    assert.deepEqual(payload, { success: true, data: [] });
+    assert.deepEqual(payload, { schemaVersion: '1.0.0', success: true, data: [] });
   });
 
   it('outputInfo / outputSuccess / outputAction are silent in JSON mode', () => {
@@ -105,6 +105,6 @@ describe('Quiet mode', () => {
     setJsonMode(true);
     outputResult({ foo: 'bar' }, 'T', true);
     const payload = JSON.parse(cap.out.join(''));
-    assert.deepEqual(payload, { success: true, data: { foo: 'bar' } });
+    assert.deepEqual(payload, { schemaVersion: '1.0.0', success: true, data: { foo: 'bar' } });
   });
 });

@@ -1,5 +1,7 @@
 import chalk from 'chalk';
+import { CommanderError } from 'commander';
 import { HttpRequestError } from './http.js';
+import { JSON_SCHEMA_VERSION } from './json-contract.js';
 
 export class CliError extends Error {
   constructor(message: string, public readonly code: string) {
@@ -8,10 +10,12 @@ export class CliError extends Error {
   }
 }
 
-interface JsonErrorPayload {
+export interface JsonErrorPayload {
+  schemaVersion: typeof JSON_SCHEMA_VERSION;
   success: false;
   error: string;
-  code?: string;
+  code: string;
+  retryable: boolean;
   module?: string;
   network?: string;
   host?: string;
@@ -47,6 +51,7 @@ export function handleError(err: unknown): never {
     console.error(chalk.red(`Error: ${sanitizeChainText(payload.error)}`));
     const details = [
       payload.code ? `code=${payload.code}` : undefined,
+      `retryable=${payload.retryable}`,
       payload.module ? `module=${payload.module}` : undefined,
       payload.network ? `network=${payload.network}` : undefined,
       payload.host ? `host=${payload.host}` : undefined,
@@ -66,58 +71,96 @@ const USER_CANCEL_PATTERNS = [
   /^CANCELLED_BY_CALLER$/,
 ];
 
-function classifyError(err: unknown): JsonErrorPayload {
+type ErrorDetails = Partial<Omit<JsonErrorPayload, 'schemaVersion' | 'success' | 'error' | 'code' | 'retryable'>>;
+
+function errorPayload(
+  error: string,
+  code: string,
+  retryable: boolean,
+  details: ErrorDetails = {},
+): JsonErrorPayload {
+  return { schemaVersion: JSON_SCHEMA_VERSION, success: false, error, code, retryable, ...details };
+}
+
+export function classifyError(err: unknown): JsonErrorPayload {
+  if (err instanceof CommanderError) {
+    const message = err.message.replace(/^error:\s*/i, '').trim();
+    return errorPayload(message, 'CLI_USAGE_ERROR', false, {
+      hint: 'Run `justlend --help` or `justlend <command> --help` and correct the arguments.',
+    });
+  }
+
   if (err instanceof HttpRequestError) {
-    return {
-      success: false,
-      error: err.message,
-      code: err.code,
+    const retryable = err.status === undefined || err.status === 429 || err.status >= 500;
+    return errorPayload(err.message, err.code ?? 'HTTP_REQUEST_FAILED', retryable, {
       module: err.module,
       network: err.network,
       host: err.host,
       path: err.path,
       status: err.status,
       hint: err.hint,
-    };
+    });
   }
 
   const msg = err instanceof Error ? err.message : String(err);
   const lower = msg.toLowerCase();
 
-  if (USER_CANCEL_PATTERNS.some(p => p.test(msg))) {
-    return { success: false, error: 'Transaction cancelled by user in TronLink', code: 'USER_CANCELLED' };
+  if (err instanceof CliError) {
+    return errorPayload(msg, err.code, false);
+  }
+  if (USER_CANCEL_PATTERNS.some(pattern => pattern.test(msg))) {
+    return errorPayload('Transaction cancelled by user in TronLink', 'USER_CANCELLED', false);
   }
   if (lower.includes('timeout') || lower.includes('timed out')) {
-    return { success: false, error: 'TronLink approval timed out. Please try again', code: 'SIGNER_TIMEOUT' };
+    return errorPayload(
+      'TronLink approval timed out. Please try again',
+      'SIGNER_TIMEOUT',
+      true,
+      { hint: 'Retry only while the user is present to approve the wallet request.' },
+    );
   }
   if (lower.includes('insufficient') || lower.includes('balance is not sufficient')) {
-    return { success: false, error: `Insufficient balance: ${msg}`, code: 'INSUFFICIENT_BALANCE' };
+    return errorPayload(`Insufficient balance: ${msg}`, 'INSUFFICIENT_BALANCE', false);
   }
   if (lower.includes('allowance')) {
-    return { success: false, error: `Insufficient allowance: ${msg}. Run \`justlend approve <token>\` first`, code: 'INSUFFICIENT_ALLOWANCE' };
+    return errorPayload(
+      `Insufficient allowance: ${msg}. Run \`justlend approve <token>\` first`,
+      'INSUFFICIENT_ALLOWANCE',
+      false,
+    );
   }
   if (lower.includes('invalid address') || lower.includes('invalid base58')) {
-    return { success: false, error: 'Invalid TRON address provided', code: 'INVALID_ADDRESS' };
+    return errorPayload('Invalid TRON address provided', 'INVALID_ADDRESS', false);
   }
   if (lower.includes('ipc connection closed') || lower.includes('ipc connection lost')) {
-    return {
-      success: false,
-      error: 'Signer disconnected (browser closed?). Keep the TronLink signer page open in your browser and retry.',
-      code: 'SIGNER_DISCONNECTED',
-    };
+    return errorPayload(
+      'Signer disconnected (browser closed?). Keep the TronLink signer page open in your browser and retry.',
+      'SIGNER_DISCONNECTED',
+      true,
+      { hint: 'Reconnect the signer before retrying; never auto-retry a pending write.' },
+    );
   }
-  if (lower.includes('econnrefused') || lower.includes('enotfound') || lower.includes('etimedout') || lower.includes('network error') || lower.includes('failed to fetch') || lower === 'fetch failed') {
-    return {
-      success: false,
-      error: 'Network connection failed. Check your internet connection',
-      code: 'NETWORK_CONNECTION_FAILED',
-    };
+  if (
+    lower.includes('econnrefused') || lower.includes('enotfound') ||
+    lower.includes('etimedout') || lower.includes('network error') ||
+    lower.includes('failed to fetch') || lower === 'fetch failed'
+  ) {
+    return errorPayload(
+      'Network connection failed. Check your internet connection',
+      'NETWORK_CONNECTION_FAILED',
+      true,
+    );
   }
   if (lower.includes('broadcast failed')) {
-    return { success: false, error: `Transaction broadcast failed: ${msg}`, code: 'BROADCAST_FAILED' };
+    return errorPayload(
+      `Transaction broadcast failed: ${msg}`,
+      'BROADCAST_FAILED',
+      false,
+      { hint: 'Inspect the transaction state manually; writes must never be auto-retried.' },
+    );
   }
 
-  return { success: false, error: msg };
+  return errorPayload(msg, 'UNKNOWN_ERROR', false);
 }
 
 export function sanitizeError(err: unknown): string {
