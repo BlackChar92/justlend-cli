@@ -5,6 +5,7 @@
  * Real impl ports MCP services as planned in development documentation.
  */
 import type { Command } from 'commander';
+import { emitJson } from '../lib/output.js';
 
 interface Stub {
   /** Command path. Use space-separated tokens; first token is the (sub)command name. */
@@ -244,7 +245,7 @@ function registerLeaf(parent: Command, spec: string, stub: Stub): void {
         args: passed,
       };
       if (opts.json) {
-        process.stdout.write(JSON.stringify(payload) + '\n');
+        emitJson(payload);
       } else {
         process.stdout.write(`[${stub.phase}] ${stub.cmd} — not yet implemented (args: ${JSON.stringify(passed)})\n`);
       }

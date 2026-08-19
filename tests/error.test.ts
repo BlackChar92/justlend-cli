@@ -53,9 +53,11 @@ describe('structured JSON errors', () => {
 
     assert.deepEqual(cap.exits, [1]);
     const payload = JSON.parse(cap.err.join(''));
+    assert.equal(payload.schemaVersion, '1.0.0');
     assert.equal(payload.success, false);
     assert.equal(payload.error, 'fetch failed');
     assert.equal(payload.code, 'V1_MARKETS_FETCH_FAILED');
+    assert.equal(payload.retryable, true);
     assert.equal(payload.module, 'v1.market.list');
     assert.equal(payload.network, 'nile');
     assert.equal(payload.host, 'https://example.invalid');

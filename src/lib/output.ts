@@ -4,6 +4,7 @@ import ora from 'ora';
 import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { isJsonMode, isQuietMode } from './error.js';
+import { jsonSuccess } from './json-contract.js';
 
 const SENSITIVE_OUTPUT_KEY = /^(?:access[_-]?token|refund[_-]?token|order[_-]?token|api[_-]?key|authorization|private[_-]?key|mnemonic|secret)$/i;
 
@@ -25,14 +26,14 @@ export function sanitizeTerminalText(value: unknown): string {
 
 /**
  * JSON output envelope. All JSON-mode payloads (single result, list, signed tx)
- * are wrapped as `{ success: true, data: ... }` so downstream consumers
+ * are wrapped as `{ schemaVersion: "1.0.0", success: true, data: ... }` so downstream consumers
  * (AI agents, CI scripts) can rely on a single contract. Errors come out via
- * handleError() as `{ success: false, error: <message> }` on stderr.
+ * handleError() as a versioned `{ success: false, error, code, retryable }` envelope on stderr.
  *
  * Inspired by tronprotocol/wallet-cli's standard CLI mode.
  */
-function emitJson(data: unknown): void {
-  process.stdout.write(JSON.stringify({ success: true, data: redactSensitiveOutput(data) }, null, 2) + '\n');
+export function emitJson(data: unknown): void {
+  process.stdout.write(JSON.stringify(jsonSuccess(redactSensitiveOutput(data)), null, 2) + '\n');
 }
 
 export function outputResult(

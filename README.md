@@ -56,7 +56,7 @@ npm run test:smoke:nile
 | `--api-host <url>` | network default | Override JustLend V1 backend host; env: `JUSTLEND_API_HOST`. |
 | `--moolah-api-host <url>` | network default | Override V2 Moolah backend host; env: `JUSTLEND_MOOLAH_API_HOST`. |
 | `--energy-api-url <url>` | none | Energy direct-purchase API; env: `JUSTLEND_ENERGY_API_URL`. No fallback is used. |
-| `--json` | off | Machine-readable output: `{success,data}` or `{success:false,error}`. |
+| `--json` | off | Versioned machine-readable output; success on stdout, one structured error on stderr. |
 | `--local-broadcast` | off | Broadcast via CLI local TronWeb instead of signer TronWeb. |
 | `--no-broadcast` | off | Sign only; return `signedTx` without sending. |
 | `--dry-run` | off | Build calldata and run `triggerconstantcontract` simulation. No signer, no broadcast. |
@@ -248,21 +248,26 @@ Success:
 
 ```json
 {
+  "schemaVersion": "1.0.0",
   "success": true,
   "data": {}
 }
 ```
 
-Failure:
+Failure (written as exactly one JSON object to stderr, including parser/usage failures):
 
 ```json
 {
+  "schemaVersion": "1.0.0",
   "success": false,
-  "error": "message"
+  "error": "unknown command 'example'",
+  "code": "CLI_USAGE_ERROR",
+  "retryable": false,
+  "hint": "Run `justlend --help` or `justlend <command> --help` and correct the arguments."
 }
 ```
 
-Failures may include additional diagnostic fields such as `code`, `module`, `network`, `host`, `path`, `status`, and `hint`.
+The machine-readable JSON Schema is [`schemas/output-v1.schema.json`](./schemas/output-v1.schema.json). Consumers should pin the `schemaVersion` **major**: additive fields may appear within v1, while a removal, rename, or semantic break requires v2. Failures may include diagnostic fields such as `module`, `network`, `host`, `path`, `status`, and `hint`.
 
 ### Error / exit code contract
 
@@ -270,6 +275,7 @@ Branch on the **exit code** first (`0` = success, non-zero = failure), then on t
 
 | `code` | Meaning | Retryable | How to handle |
 |--------|---------|:---:|---------------|
+| `CLI_USAGE_ERROR` | Unknown command, option, or invalid argument | ❌ | Correct arguments using `--help`; never retry unchanged |
 | `USER_CANCELLED` | Rejected/cancelled in TronLink | ❌ | Re-approve in wallet |
 | `SIGNER_TIMEOUT` | TronLink approval timed out | ⚠️ (user must be present) | Retry, approve promptly |
 | `SIGNER_DISCONNECTED` | Signer page closed / IPC dropped | ⚠️ after reconnect | Keep the TronLink signer page open, retry |
