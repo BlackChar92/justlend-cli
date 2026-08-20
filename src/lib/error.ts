@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { CommanderError } from 'commander';
+import { EnergyPurchaseError } from './energy-purchase.js';
 import { HttpRequestError } from './http.js';
 import { JSON_SCHEMA_VERSION } from './json-contract.js';
 
@@ -100,6 +101,12 @@ export function classifyError(err: unknown): JsonErrorPayload {
       status: err.status,
       hint: err.hint,
     });
+  }
+
+  if (err instanceof EnergyPurchaseError) {
+    const details: ErrorDetails = { module: 'energy.purchase' };
+    if (err.status !== undefined) details.status = err.status;
+    return errorPayload(err.message, err.code, err.retryable, details);
   }
 
   const msg = err instanceof Error ? err.message : String(err);
