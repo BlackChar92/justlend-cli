@@ -15,6 +15,8 @@ export const ENERGY_PURCHASE_PATHS = {
   order: (id: string | number) => `/v1/consumer/energy/orders/${encodeURIComponent(String(id))}`,
 } as const;
 
+export const DEFAULT_ENERGY_PURCHASE_API_URL = 'https://tegrow.ablesdxd.link';
+
 export const ENERGY_PURCHASE_TERMINAL_STATES = ['delivered', 'partial', 'failed', 'expired', 'cancelled'] as const;
 
 const ORDER_TTL_MS = 5 * 60 * 1000;
@@ -62,7 +64,7 @@ export interface EnergyPurchaseConfig {
   energy_presets: number[];
   activation_fee_sun?: number;
   supported_durations: string[];
-  payment_address: string;
+  payment_address?: string;
   [key: string]: unknown;
 }
 
@@ -75,11 +77,14 @@ export interface EnergyPurchaseQuote {
 
 export interface SignedEnergyPurchaseRequest {
   receivers: string[];
-  energy: number;
+  energy_per_receiver: number;
+  /** Legacy persisted field from pre-production contract drafts. */
+  energy?: number;
   duration: string;
   payer_address: string;
   signed_transaction: {
     txID: string;
+    raw_data: Record<string, unknown>;
     raw_data_hex: string;
     signature: string[];
     visible: boolean;
@@ -454,13 +459,7 @@ export interface EnergyPurchaseClientOptions {
 }
 
 function resolveBaseUrl(explicit?: string): string {
-  const value = explicit || process.env.JUSTLEND_ENERGY_API_URL;
-  if (!value) {
-    throw new EnergyPurchaseError(
-      'CONFIG_MISSING',
-      'Set JUSTLEND_ENERGY_API_URL (or --energy-api-url). No production fallback is configured.',
-    );
-  }
+  const value = explicit || process.env.JUSTLEND_ENERGY_API_URL || DEFAULT_ENERGY_PURCHASE_API_URL;
   return validateTrustedUrl(value, 'energyApiHost');
 }
 
@@ -491,7 +490,33 @@ function validateQuoteInput(receivers: string[], energyPerReceiver: number, dura
   if (!Array.isArray(config.supported_durations) || !config.supported_durations.includes(duration)) {
     throw new EnergyPurchaseError('INVALID_DURATION', 'duration must come from the live supported_durations list.');
   }
-  validateAddress(config.payment_address, 'config payment_address');
+}
+
+function normalizeConfig(value: Record<string, any>): EnergyPurchaseConfig {
+  return {
+    ...value,
+    max_batch_receivers: value.max_batch_receivers ?? value.max_receivers,
+    energy_presets: value.energy_presets ?? value.presets,
+    supported_durations: value.supported_durations ?? value.durations,
+  } as EnergyPurchaseConfig;
+}
+
+function normalizeQuote(value: Record<string, any>): EnergyPurchaseQuote {
+  return {
+    ...value,
+    total_sun: value.total_sun ?? value.amount_sun,
+    total_trx: value.total_trx ?? value.amount_trx,
+    payment_address: value.payment_address ?? value.pay_address,
+  } as EnergyPurchaseQuote;
+}
+
+function requestForProductionApi(request: SignedEnergyPurchaseRequest): SignedEnergyPurchaseRequest {
+  const energyPerReceiver = request.energy_per_receiver ?? request.energy;
+  return {
+    ...request,
+    energy_per_receiver: energyPerReceiver as number,
+    energy: undefined,
+  };
 }
 
 function normalizeHex(value: unknown): string {
@@ -584,6 +609,7 @@ function normalizeSignedTransaction(value: unknown, expected: Record<string, any
 function signedTransactionForWire(signed: Record<string, any>): SignedEnergyPurchaseRequest['signed_transaction'] {
   return {
     txID: normalizeHex(signed.txID),
+    raw_data: signed.raw_data,
     raw_data_hex: normalizeHex(signed.raw_data_hex),
     signature: [...signed.signature],
     visible: signed.visible === true,
@@ -688,8 +714,8 @@ export class EnergyPurchaseClient {
     return envelope.data as T;
   }
 
-  getConfig(signal?: AbortSignal): Promise<EnergyPurchaseConfig> {
-    return this.request('GET', ENERGY_PURCHASE_PATHS.config, { signal });
+  async getConfig(signal?: AbortSignal): Promise<EnergyPurchaseConfig> {
+    return normalizeConfig(await this.request<Record<string, any>>('GET', ENERGY_PURCHASE_PATHS.config, { signal }));
   }
 
   getCurrentPrice(signal?: AbortSignal): Promise<Record<string, unknown>> {
@@ -709,16 +735,29 @@ export class EnergyPurchaseClient {
   }): Promise<EnergyPurchaseQuote> {
     const config = input.config || await this.getConfig(input.signal);
     validateQuoteInput(input.receivers, input.energyPerReceiver, input.duration, config);
-    const quote = await this.request<Omit<EnergyPurchaseQuote, 'payment_address'>>('POST', ENERGY_PURCHASE_PATHS.quote, {
-      body: { receivers: input.receivers, quantity: input.energyPerReceiver, duration: input.duration },
+    const rawQuote = await this.request<Record<string, any>>('POST', ENERGY_PURCHASE_PATHS.quote, {
+      body: { receivers: input.receivers, energy_per_receiver: input.energyPerReceiver },
       signal: input.signal,
     });
+    const quote = normalizeQuote(rawQuote);
+    if (!quote.payment_address && config.payment_address) quote.payment_address = config.payment_address;
     if (
-      !Number.isSafeInteger(Number(quote?.total_sun)) || Number(quote.total_sun) <= 0
+      !Number.isSafeInteger(Number(quote?.total_sun)) || Number(quote.total_sun) <= 0 ||
+      typeof quote.payment_address !== 'string'
     ) {
       throw new EnergyPurchaseError('INVALID_RESPONSE', 'Energy purchase quote is missing required fields.');
     }
-    return { ...quote, payment_address: config.payment_address } as EnergyPurchaseQuote;
+    try {
+      validateAddress(quote.payment_address, 'quote payment_address');
+    } catch (cause) {
+      throw new EnergyPurchaseError('INVALID_RESPONSE', 'Energy purchase quote contains an invalid payment address.', { cause });
+    }
+    if (quote.can_fulfill === false) {
+      throw new EnergyPurchaseError('POOL_INSUFFICIENT', 'The live resource pool cannot fulfill this purchase.', {
+        details: { maxSingleOrderEnergy: quote.max_single_order_energy },
+      });
+    }
+    return quote;
   }
 
   getOrder(orderId: string | number, token?: string, signal?: AbortSignal): Promise<Record<string, any>> {
@@ -731,7 +770,7 @@ export class EnergyPurchaseClient {
     void options;
     return Promise.reject(new EnergyPurchaseError(
       'UNSUPPORTED_OPERATION',
-      'The authoritative energy API has no order-history endpoint; persist the returned order ID and access token.',
+      'Order history is not exposed by this CLI; persist the returned order ID and access token.',
     ));
   }
 
@@ -860,7 +899,7 @@ export class EnergyPurchaseClient {
       }
       try {
         risk.recoveredOrder = await this.request<Record<string, unknown>>('POST', ENERGY_PURCHASE_PATHS.buy, {
-          body: risk.signedRequest,
+          body: requestForProductionApi(risk.signedRequest),
         });
         risk.paymentConfirmed = true;
         this.storage.save(risk);
@@ -1003,7 +1042,7 @@ export class EnergyPurchaseClient {
     const retryDeadline = Math.min(signedDeadline, this.now() + this.paymentRetryTimeoutMs);
     const signedRequest: SignedEnergyPurchaseRequest = {
       receivers: [...input.receivers],
-      energy: input.energyPerReceiver,
+      energy_per_receiver: input.energyPerReceiver,
       duration: input.duration,
       payer_address: input.payerAddress,
       signed_transaction: signedTransactionForWire(signed),
@@ -1097,17 +1136,18 @@ export class EnergyPurchaseClient {
       }
     }
 
-    const batch = order.batch;
-    const payment = order.payment;
-    if (!batch || typeof batch.id !== 'string' || typeof batch.access_token !== 'string') {
-      throw new EnergyPurchaseError('INVALID_RESPONSE', 'Energy purchase response is missing batch or access token.');
+    const batch = order.batch && typeof order.batch === 'object' ? order.batch : undefined;
+    const payment = order.payment && typeof order.payment === 'object' ? order.payment : undefined;
+    const orderId = batch?.id ?? order.id;
+    const accessToken = batch?.access_token ?? order.access_token;
+    if (!((typeof orderId === 'string' && orderId.trim()) || Number.isSafeInteger(orderId))) {
+      throw new EnergyPurchaseError('INVALID_RESPONSE', 'Energy purchase response is missing an order id.');
     }
     this.storage.remove(input.payerAddress, txId);
-    const orderId = batch.id;
-    const txHash = payment?.tx_hash || txId;
+    const txHash = payment?.tx_hash || order.tx_id || order.payment_tx_id || txId;
     input.onState?.('delivering');
-    const detail = await this.pollOrder(orderId, batch.access_token, input.signal);
-    const state = detail?.state || batch.state || 'pending';
+    const detail = await this.pollOrder(orderId, typeof accessToken === 'string' && accessToken ? accessToken : undefined, input.signal);
+    const state = detail?.state || batch?.state || order.state || 'pending';
     if (state === 'failed' || state === 'expired') {
       throw new EnergyPurchaseError('DELIVERY_FAILED', 'Payment was accepted but energy delivery failed.', {
         details: { orderId, txHash, state, detail },

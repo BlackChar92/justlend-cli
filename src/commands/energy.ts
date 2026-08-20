@@ -7,7 +7,7 @@ import { sendContractTx } from '../lib/tx.js';
 import { getTronWeb, validateAddress } from '../lib/tronweb.js';
 import { utils } from '../lib/utils.js';
 import { optionalRead, warningFields } from '../lib/optional-read.js';
-import { EnergyPurchaseClient } from '../lib/energy-purchase.js';
+import { EnergyPurchaseClient, EnergyPurchaseError } from '../lib/energy-purchase.js';
 import { initSigner, resolveSignerTimeout, shutdownSigner } from '../lib/signer.js';
 import { confirmProceed, outputAction, outputInfo, outputList } from '../lib/output.js';
 import { parsePositiveInteger } from '../lib/command-utils.js';
@@ -163,11 +163,17 @@ export function registerEnergyCommands(program: Command): void {
 
   const purchase = energy
     .command('purchase')
-    .description('Energy direct-purchase commands (requires an explicitly configured API URL)');
+    .description('Energy direct-purchase commands (official production API by default)');
 
   const makePurchaseClient = (command: Command, withTronWeb = false) => {
     const opts = command.optsWithGlobals();
     const network = getNetworkFromCommand(command);
+    if (network !== 'mainnet' && !opts.energyApiUrl && !process.env.JUSTLEND_ENERGY_API_URL) {
+      throw new EnergyPurchaseError(
+        'CONFIG_MISSING',
+        'Set JUSTLEND_ENERGY_API_URL or --energy-api-url for non-mainnet energy purchase requests.',
+      );
+    }
     return new EnergyPurchaseClient({
       baseUrl: opts.energyApiUrl,
       tronWeb: withTronWeb ? getTronWeb(network) : undefined,
@@ -222,11 +228,15 @@ export function registerEnergyCommands(program: Command): void {
       const opts = this.optsWithGlobals();
       const risks = await makePurchaseClient(this, true).reconcilePaymentRisks(address);
       const publicRisks = risks.map(risk => ({
-        ...(risk.recoveredOrder?.batch && typeof risk.recoveredOrder.batch === 'object'
-          ? {
-              recoveredOrderId: (risk.recoveredOrder.batch as Record<string, unknown>).id,
-              recoveredState: (risk.recoveredOrder.batch as Record<string, unknown>).state,
-            }
+        ...(risk.recoveredOrder && typeof risk.recoveredOrder === 'object'
+          ? (() => {
+              const recovered = risk.recoveredOrder as Record<string, any>;
+              const batch = recovered.batch && typeof recovered.batch === 'object' ? recovered.batch : undefined;
+              return {
+                recoveredOrderId: batch?.id ?? recovered.id,
+                recoveredState: batch?.state ?? recovered.state,
+              };
+            })()
           : {}),
         payerAddress: risk.payerAddress,
         signedTxId: risk.signedTxId,

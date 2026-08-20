@@ -55,7 +55,7 @@ npm run test:smoke:nile
 | `--full-host <url>` | network default | Override Tron RPC host; env: `JUSTLEND_FULL_HOST`. |
 | `--api-host <url>` | network default | Override JustLend V1 backend host; env: `JUSTLEND_API_HOST`. |
 | `--moolah-api-host <url>` | network default | Override V2 Moolah backend host; env: `JUSTLEND_MOOLAH_API_HOST`. |
-| `--energy-api-url <url>` | none | Energy direct-purchase API; env: `JUSTLEND_ENERGY_API_URL`. No fallback is used. |
+| `--energy-api-url <url>` | official production API | Override the Energy direct-purchase API; env: `JUSTLEND_ENERGY_API_URL`. |
 | `--json` | off | Versioned machine-readable output; success on stdout, one structured error on stderr. |
 | `--local-broadcast` | off | Broadcast via CLI local TronWeb instead of signer TronWeb. |
 | `--no-broadcast` | off | Sign only; return `signedTx` without sending. |
@@ -125,12 +125,13 @@ rewards       V1 mining + V2 airdrop claimable summary
 
 ### Energy direct purchase
 
-The purchase API is separately deployed and must be configured explicitly. Until its production
-hostname is added to the CLI allowlist, a custom endpoint also requires the standard explicit
-untrusted-host opt-in.
+The purchase API is separately deployed. The CLI uses the same official production endpoint as the
+app release by default: `https://tegrow.ablesdxd.link`. Limits, durations, prices, payment address,
+and pool capacity remain live backend data; no economic values are hard-coded. A custom/test endpoint
+requires an explicit URL and the standard untrusted-host opt-in.
 
 ```bash
-export JUSTLEND_ENERGY_API_URL="https://energy-api.example"
+export JUSTLEND_ENERGY_API_URL="https://energy-api.example" # optional override
 export JUSTLEND_ALLOW_UNTRUSTED_HOSTS=1 # temporary/custom endpoints only
 
 # Read live backend limits, prices, and pool capacity

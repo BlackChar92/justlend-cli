@@ -8,6 +8,7 @@ const TRUSTED_HOSTS = new Set([
   'labc.ablesdxd.link',
   'nileapi.justlend.org',
   'zenvora.ablesdxd.link',
+  'tegrow.ablesdxd.link',
 ]);
 
 const warned = new Set<string>();

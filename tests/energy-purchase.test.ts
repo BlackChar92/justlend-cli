@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  DEFAULT_ENERGY_PURCHASE_API_URL,
   EnergyPurchaseClient,
   EnergyPurchaseError,
   FileEnergyPaymentRiskStore,
@@ -98,9 +99,50 @@ describe('energy direct-purchase client', () => {
     process.env = { ...previousEnv };
   });
 
-  it('has no implicit production API fallback', () => {
-    assert.throws(() => new EnergyPurchaseClient(), (error: unknown) =>
-      error instanceof EnergyPurchaseError && error.code === 'CONFIG_MISSING');
+  it('uses the official production API without an untrusted-host opt-in', () => {
+    delete process.env.JUSTLEND_ALLOW_UNTRUSTED_HOSTS;
+    const client = new EnergyPurchaseClient({ fetch: mock.fn() });
+    assert.equal(client.baseUrl, DEFAULT_ENERGY_PURCHASE_API_URL);
+  });
+
+  it('normalizes the app production config and quote contract', async () => {
+    delete process.env.JUSTLEND_ALLOW_UNTRUSTED_HOSTS;
+    const fetchImpl = mock.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/v1/config')) return envelope({
+        min_energy: 65000,
+        max_energy: 5000000,
+        max_receivers: 50,
+        presets: [65000, 131000],
+        durations: ['1h'],
+        activation_fee_sun: 1100000,
+      });
+      if (url.endsWith('/v1/price')) {
+        assert.deepEqual(JSON.parse(String(init?.body)), {
+          receivers: [RECEIVER],
+          energy_per_receiver: 65000,
+        });
+        return envelope({ amount_sun: 2340000, amount_trx: '2.34', pay_address: PAY_ADDRESS, can_fulfill: true });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const client = new EnergyPurchaseClient({ fetch: fetchImpl });
+    const liveConfig = await client.getConfig();
+    assert.equal(liveConfig.max_batch_receivers, 50);
+    assert.deepEqual(liveConfig.energy_presets, [65000, 131000]);
+    assert.deepEqual(liveConfig.supported_durations, ['1h']);
+    assert.deepEqual(
+      await client.quote({ receivers: [RECEIVER], energyPerReceiver: 65000, duration: '1h', config: liveConfig }),
+      {
+        amount_sun: 2340000,
+        amount_trx: '2.34',
+        pay_address: PAY_ADDRESS,
+        can_fulfill: true,
+        total_sun: 2340000,
+        total_trx: '2.34',
+        payment_address: PAY_ADDRESS,
+      },
+    );
   });
 
   it('exposes the nested energy purchase command tree', () => {
@@ -137,10 +179,14 @@ describe('energy direct-purchase client', () => {
         return envelope({ total_sun: 2405000, total_trx: '2.405' });
       }
       if (url.endsWith('/v1/consumer/energy/buy')) {
-        submitted.push(JSON.parse(String(init?.body)).signed_transaction.txID);
+        const submittedRequest = JSON.parse(String(init?.body));
+        submitted.push(submittedRequest.signed_transaction.txID);
+        assert.equal(submittedRequest.energy_per_receiver, 65000);
+        assert.equal(submittedRequest.energy, undefined);
+        assert.ok(submittedRequest.signed_transaction.raw_data);
         buyCalls += 1;
         if (buyCalls === 1) throw new Error('connection reset');
-        return envelope({ batch: { id: '7', access_token: 'token', state: 'paid' }, payment: { tx_hash: TX_ID } });
+        return envelope({ id: '7', access_token: 'token', state: 'paid', tx_id: TX_ID });
       }
       if (url.endsWith('/v1/consumer/energy/orders/7')) return envelope({ id: 7, state: 'delivered' });
       throw new Error(`unexpected ${url}`);
@@ -406,7 +452,7 @@ describe('energy direct-purchase client', () => {
       networkFingerprint: 'api=https://energy.example/;provider=https://wrong.network',
       signedRequest: {
         receivers: [RECEIVER], energy: 65000, duration: '1h', payer_address: PAYER,
-        signed_transaction: { txID: TX_ID, raw_data_hex: RAW_HEX, signature: ['aa'], visible: false },
+        signed_transaction: { txID: TX_ID, raw_data: {}, raw_data_hex: RAW_HEX, signature: ['aa'], visible: false },
       },
     });
     const fetchImpl = mock.fn(async () => { throw new Error('must not use wrong network'); });
@@ -454,7 +500,7 @@ describe('energy direct-purchase client', () => {
       networkFingerprint: `api=${client.baseUrl};provider=mainnet-provider`,
       signedRequest: {
         receivers: [RECEIVER], energy: 65000, duration: '1h', payer_address: PAYER,
-        signed_transaction: { txID: TX_ID, raw_data_hex: RAW_HEX, signature: ['aa'], visible: false },
+        signed_transaction: { txID: TX_ID, raw_data: {}, raw_data_hex: RAW_HEX, signature: ['aa'], visible: false },
       },
     });
 
