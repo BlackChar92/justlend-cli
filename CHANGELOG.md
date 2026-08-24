@@ -2,6 +2,17 @@
 
 All notable changes to the JustLend CLI are documented here.
 
+## [Unreleased]
+
+### Added
+
+- Added public payer history under `energy purchase history` for in-progress and settled direct-purchase orders.
+
+### Fixed
+
+- Applied the mainnet-only production-host guard to the `buy` path, including dry runs and explicit production URL overrides.
+- Kept replayable payment recovery state until public history confirms tokenless idempotent orders, and documented the exact signed-request persistence boundary.
+
 ## [1.0.1] - 2026-08-19
 
 ### Added

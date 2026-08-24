@@ -7,7 +7,11 @@ import { sendContractTx } from '../lib/tx.js';
 import { getTronWeb, validateAddress } from '../lib/tronweb.js';
 import { utils } from '../lib/utils.js';
 import { optionalRead, warningFields } from '../lib/optional-read.js';
-import { EnergyPurchaseClient, EnergyPurchaseError } from '../lib/energy-purchase.js';
+import {
+  DEFAULT_ENERGY_PURCHASE_API_URL,
+  EnergyPurchaseClient,
+  EnergyPurchaseError,
+} from '../lib/energy-purchase.js';
 import { initSigner, resolveSignerTimeout, shutdownSigner } from '../lib/signer.js';
 import { confirmProceed, outputAction, outputInfo, outputList } from '../lib/output.js';
 import { parsePositiveInteger } from '../lib/command-utils.js';
@@ -168,17 +172,21 @@ export function registerEnergyCommands(program: Command): void {
   const makePurchaseClient = (command: Command, withTronWeb = false) => {
     const opts = command.optsWithGlobals();
     const network = getNetworkFromCommand(command);
-    if (network !== 'mainnet' && !opts.energyApiUrl && !process.env.JUSTLEND_ENERGY_API_URL) {
-      throw new EnergyPurchaseError(
-        'CONFIG_MISSING',
-        'Set JUSTLEND_ENERGY_API_URL or --energy-api-url for non-mainnet energy purchase requests.',
-      );
-    }
-    return new EnergyPurchaseClient({
+    const client = new EnergyPurchaseClient({
       baseUrl: opts.energyApiUrl,
       tronWeb: withTronWeb ? getTronWeb(network) : undefined,
       networkFingerprint: withTronWeb ? network : undefined,
     });
+    if (
+      network !== 'mainnet' &&
+      new URL(client.baseUrl).origin === new URL(DEFAULT_ENERGY_PURCHASE_API_URL).origin
+    ) {
+      throw new EnergyPurchaseError(
+        'CONFIG_MISSING',
+        'The official energy purchase API is mainnet-only. Set JUSTLEND_ENERGY_API_URL or --energy-api-url to a non-mainnet service.',
+      );
+    }
+    return client;
   };
 
   purchase.command('config')
@@ -220,6 +228,27 @@ export function registerEnergyCommands(program: Command): void {
       const opts = this.optsWithGlobals();
       const detail = await makePurchaseClient(this).getOrder(orderId, this.opts().orderToken);
       outputResult(detail, 'Energy Purchase Order', Boolean(opts.json));
+    });
+
+  purchase.command('history <address>')
+    .description('Show energy purchase history for a payer address')
+    .option('--page <number>', 'History page (1-based; used with --size)', parsePositiveInteger, 1)
+    .option('--size <number>', 'Rows per page; omit to request the backend default/all-history view', parsePositiveInteger)
+    .action(async function (this: Command, address: string) {
+      const opts = this.optsWithGlobals();
+      const localOpts = this.opts();
+      const history = await makePurchaseClient(this).getHistory(address, {
+        page: localOpts.page,
+        size: localOpts.size,
+      });
+      const rows = Array.isArray(history.rows) ? history.rows : [];
+      outputList(rows, 'Energy Purchase History', Boolean(opts.json), {
+        address,
+        page: history.page,
+        size: history.size,
+        total: history.total,
+        truncated: history.truncated,
+      });
     });
 
   purchase.command('risk <address>')
@@ -268,7 +297,7 @@ export function registerEnergyCommands(program: Command): void {
       const energyPerReceiver = parsePositiveInteger(energyAmount);
       const receivers = this.opts().receiver as string[];
       const tronWeb = getTronWeb(network);
-      const client = new EnergyPurchaseClient({ baseUrl: opts.energyApiUrl, tronWeb, networkFingerprint: network });
+      const client = makePurchaseClient(this, true);
       const config = await client.getConfig();
       const duration = this.opts().duration || config.supported_durations?.[0];
       if (!duration) throw new Error('Energy purchase API returned no supported duration.');

@@ -149,7 +149,45 @@ describe('energy direct-purchase client', () => {
     const program = createProgram();
     const energy = program.commands.find(command => command.name() === 'energy');
     const purchase = energy?.commands.find(command => command.name() === 'purchase');
-    assert.deepEqual(purchase?.commands.map(command => command.name()), ['config', 'quote', 'order', 'risk', 'buy']);
+    assert.deepEqual(purchase?.commands.map(command => command.name()), ['config', 'quote', 'order', 'history', 'risk', 'buy']);
+  });
+
+  it('blocks the production purchase host on Nile, including the buy path', async () => {
+    delete process.env.JUSTLEND_ALLOW_UNTRUSTED_HOSTS;
+    const args = [
+      '--network', 'nile', '--dry-run',
+      'energy', 'purchase', 'buy', '65000', '--receiver', RECEIVER,
+    ];
+    await assert.rejects(
+      createProgram(args).parseAsync(['node', 'justlend', ...args]),
+      (error: unknown) => error instanceof EnergyPurchaseError && error.code === 'CONFIG_MISSING',
+    );
+
+    const explicitArgs = [
+      '--network', 'nile', '--energy-api-url', DEFAULT_ENERGY_PURCHASE_API_URL, '--dry-run',
+      'energy', 'purchase', 'buy', '65000', '--receiver', RECEIVER,
+    ];
+    await assert.rejects(
+      createProgram(explicitArgs).parseAsync(['node', 'justlend', ...explicitArgs]),
+      (error: unknown) => error instanceof EnergyPurchaseError && error.code === 'CONFIG_MISSING',
+    );
+  });
+
+  it('reads public payer history with optional server pagination', async () => {
+    const calls: string[] = [];
+    const client = new EnergyPurchaseClient({
+      baseUrl: 'https://energy.example',
+      fetch: mock.fn(async (input: string | URL | Request) => {
+        calls.push(String(input));
+        return envelope({ total: 1, page: 2, size: 10, rows: [{ order_id: '7', payment_tx_id: TX_ID }] });
+      }),
+    });
+
+    const history = await client.getHistory(PAYER, { page: 2, size: 10 });
+    assert.equal(history.total, 1);
+    assert.match(calls[0] || '', /orders\/history\?address=/);
+    assert.match(calls[0] || '', /page=2/);
+    assert.match(calls[0] || '', /size=10/);
   });
 
   it('validates read-only quotes against live API limits', async () => {
@@ -189,6 +227,9 @@ describe('energy direct-purchase client', () => {
         return envelope({ id: '7', access_token: 'token', state: 'paid', tx_id: TX_ID });
       }
       if (url.endsWith('/v1/consumer/energy/orders/7')) return envelope({ id: 7, state: 'delivered' });
+      if (url.includes('/v1/consumer/energy/orders/history?')) {
+        return envelope({ rows: [{ order_id: '7', payment_tx_id: TX_ID }] });
+      }
       throw new Error(`unexpected ${url}`);
     });
     const client = new EnergyPurchaseClient({
@@ -215,6 +256,58 @@ describe('energy direct-purchase client', () => {
     assert.equal((result as any).state, 'delivered');
     assert.deepEqual(store.risks, []);
     assert.equal('sendRawTransaction' in tronWeb.trx, false);
+  });
+
+  it('returns tokenless idempotent orders without polling and retains risk until history confirms them', async () => {
+    const { tronWeb, signTransaction } = harness();
+    const store = new MemoryRiskStore();
+    let historyVisible = false;
+    let orderPollCalls = 0;
+    const fetchImpl = mock.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url.endsWith('/v1/config')) return envelope(config());
+      if (url.endsWith('/v1/price')) return envelope({ total_sun: 2405000, total_trx: '2.405' });
+      if (url.endsWith('/v1/consumer/energy/buy')) {
+        return envelope({ batch: { id: '9', access_token: null, state: 'paid' }, payment: { tx_hash: TX_ID } });
+      }
+      if (url.includes('/v1/consumer/energy/orders/history?')) {
+        return envelope({ rows: historyVisible ? [{ order_id: '9', payment_tx_id: TX_ID }] : [] });
+      }
+      if (url.includes('/v1/consumer/energy/orders/9')) {
+        orderPollCalls += 1;
+        return envelope({ id: 9, state: 'delivered' });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const client = new EnergyPurchaseClient({
+      baseUrl: 'https://energy.example',
+      fetch: fetchImpl,
+      tronWeb: tronWeb as any,
+      storage: store,
+      sleep: async () => {},
+      now: () => 1,
+      networkFingerprint: 'mainnet-provider',
+    });
+
+    const result = await client.purchase({
+      payerAddress: PAYER,
+      receivers: [RECEIVER],
+      energyPerReceiver: 65000,
+      duration: '1h',
+      expectedAmountSun: 2405000,
+      expectedPayAddress: PAY_ADDRESS,
+      signTransaction,
+    });
+
+    assert.equal((result as any).state, 'paid');
+    assert.equal((result as any).detail, null);
+    assert.equal((result as any).reconciliationRequired, true);
+    assert.equal(orderPollCalls, 0);
+    assert.equal(store.risks.length, 1);
+    assert.equal(store.risks[0]?.paymentConfirmed, true);
+
+    historyVisible = true;
+    assert.deepEqual(await client.reconcilePaymentRisks(PAYER), []);
   });
 
   it('rejects a concurrent purchase for the same payer before a second signature', async () => {

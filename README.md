@@ -148,13 +148,19 @@ justlend --yes energy purchase buy 65000 --receiver TReceiverAddress...
 
 # Reconcile a payment whose submission result was unknown
 justlend energy purchase risk TPayerAddress...
+
+# Read public purchase history; add --page/--size for server pagination
+justlend energy purchase history TPayerAddress...
 ```
 
 The CLI signs a native TRX transfer but **never broadcasts it locally**. The configured energy
 service validates and broadcasts the signed transaction. Ambiguous submissions retry only the same
-signed transaction. Public transaction identifiers—not signed transaction payloads—are persisted in
-`~/.justlend-cli/energy-payment-risks.json` so a later invocation cannot silently create a second
-payment. A per-payer intent lock is also created atomically before signing, so concurrent CLI
+signed transaction. For ambiguous submissions, the exact signed request (including the signature and
+raw transaction) is persisted in the local mode-`0600`
+`~/.justlend-cli/energy-payment-risks.json` file. It remains broadcastable until transaction expiry,
+is redacted from normal command output, and is removed only after public purchase history confirms the
+payment/order or the backend deterministically rejects it before broadcast. This prevents a later
+invocation from silently creating a second payment. A per-payer intent lock is also created atomically before signing, so concurrent CLI
 processes cannot authorize two payments. The final authoritative quote must exactly match the amount
 shown at confirmation time. Corrupt or unreadable safety state blocks purchases instead of being
 treated as empty. Risk output distinguishes FullNode `observed`/`included` status from SolidityNode
