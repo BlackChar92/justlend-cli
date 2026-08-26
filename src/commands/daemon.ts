@@ -40,14 +40,16 @@ export function registerDaemonCommands(program: Command): void {
       const signer = new TronSigner();
       await signer.start();
       const port = signer.getConfig().httpPort;
-      writeServeState(port);
+      // Keep the authentication authority in daemon memory. serve.json is only
+      // client discovery state and deleting/corrupting it must never disable IPC auth.
+      const ipcToken = writeServeState(port);
 
       // Activity tracking for idle auto-shutdown. A long-running call (e.g. a
       // signature awaiting browser approval) is held open by inFlightRequests,
       // so the daemon never shuts down mid-operation.
       let lastActivityAt = Date.now();
       let inFlightRequests = 0;
-      const server = await startIPCServer(async (method, params, signal) => {
+      const server = await startIPCServer(ipcToken, async (method, params, signal) => {
         lastActivityAt = Date.now();
         inFlightRequests++;
         try {

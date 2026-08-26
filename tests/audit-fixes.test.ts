@@ -190,6 +190,13 @@ describe('v1.0.1 audit remediation: IPC authentication contract', () => {
       () => validateIPCRequest({ id: 1, method: 'signTransaction', token: 'wrong', params: {} }, token),
       /IPC authentication failed/i,
     );
+    assert.throws(
+      () => validateIPCRequest(
+        { id: 1, method: 'signTransaction', token, params: {} },
+        undefined as unknown as string,
+      ),
+      /IPC authentication unavailable/i,
+    );
     assert.doesNotThrow(() => validateIPCRequest({ id: 1, method: 'signTransaction', token, params: {} }, token));
   });
 });
@@ -350,7 +357,7 @@ describe('audit 20260527: tx polling jitter', () => {
 describe('backport from tronlink-cli: socket chmod hardening', () => {
   it('startIPCServer is async and returns a Promise<net.Server>', () => {
     const source = readFileSync('src/lib/ipc.ts', 'utf8');
-    assert.match(source, /export function startIPCServer\(handler: RequestHandler\): Promise<net\.Server>/);
+    assert.match(source, /export function startIPCServer\(expectedToken: string, handler: RequestHandler\): Promise<net\.Server>/);
     assert.match(source, /return new Promise\(\(resolve, reject\) => \{/);
   });
 
@@ -369,7 +376,14 @@ describe('backport from tronlink-cli: socket chmod hardening', () => {
 
   it('daemon awaits the now-async startIPCServer', () => {
     const source = readFileSync('src/commands/daemon.ts', 'utf8');
-    assert.match(source, /await startIPCServer\(/);
+    assert.match(source, /const ipcToken = writeServeState\(port\)/);
+    assert.match(source, /await startIPCServer\(ipcToken,/);
+  });
+
+  it('authenticates against the daemon-memory token instead of re-reading serve.json', () => {
+    const source = readFileSync('src/lib/ipc.ts', 'utf8');
+    assert.match(source, /validateIPCRequest\(msg, expectedToken\)/);
+    assert.doesNotMatch(source, /validateIPCRequest\(msg, readServeState\(\)\?\.token\)/);
   });
 });
 
@@ -412,5 +426,38 @@ describe('audit 20260819: local signer state and sensitive API transport', () =>
   it('rejects automatic redirects for energy purchase requests', () => {
     const source = readFileSync('src/lib/energy-purchase.ts', 'utf8');
     assert.match(source, /redirect: 'error'/);
+  });
+
+  it('rejects automatic redirects in the shared HTTP helper by default', () => {
+    const source = readFileSync('src/lib/http.ts', 'utf8');
+    assert.match(source, /redirect: init\?\.redirect \?\? 'error'/);
+    assert.ok((source.match(/redirect: init(?:\?\.|\.)redirect \?\? 'error'/g) ?? []).length >= 3);
+  });
+
+  it('passes redirect=error to fetch while preserving an explicit safer policy', async () => {
+    const { fetchWithTimeout } = await import('../src/lib/http.js');
+    const originalFetch = globalThis.fetch;
+    const redirects: Array<RequestRedirect | undefined> = [];
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      redirects.push(init?.redirect);
+      return new Response('{}', { status: 200 });
+    }) as typeof fetch;
+    try {
+      await fetchWithTimeout('https://api.justlend.org/health');
+      await fetchWithTimeout(
+        'https://api.justlend.org/health',
+        { redirect: 'manual', signal: new AbortController().signal },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    assert.deepEqual(redirects, ['error', 'manual']);
+  });
+
+  it('fails closed on Moolah token-decimals errors instead of signing with 6', () => {
+    const source = readFileSync('src/lib/moolah.ts', 'utf8');
+    assert.match(source, /return resolveTrc20Decimals\(network, token\)/);
+    assert.doesNotMatch(source, /using fallback decimals|return fallback/);
+    assert.match(source, /refusing to guess decimals/);
   });
 });

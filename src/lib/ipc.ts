@@ -113,7 +113,7 @@ export type RequestHandler = (
   signal: AbortSignal,
 ) => Promise<unknown>;
 
-export function startIPCServer(handler: RequestHandler): Promise<net.Server> {
+export function startIPCServer(expectedToken: string, handler: RequestHandler): Promise<net.Server> {
   try { fs.unlinkSync(SOCKET_PATH); } catch { /* ignore */ }
 
   const server = net.createServer((conn) => {
@@ -128,7 +128,7 @@ export function startIPCServer(handler: RequestHandler): Promise<net.Server> {
       while ((idx = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, idx);
         buffer = buffer.slice(idx + 1);
-        handleMessage(conn, line, handler, activeAborts);
+        handleMessage(conn, line, expectedToken, handler, activeAborts);
       }
     });
 
@@ -163,9 +163,11 @@ export function startIPCServer(handler: RequestHandler): Promise<net.Server> {
 
 export function validateIPCRequest(
   msg: { token?: unknown; method?: unknown },
-  expectedToken?: string,
+  expectedToken: string,
 ): void {
-  if (!expectedToken) return;
+  if (typeof expectedToken !== 'string' || expectedToken.length === 0) {
+    throw new Error('IPC authentication unavailable');
+  }
   if (typeof msg.token !== 'string' || msg.token.length === 0) {
     throw new Error('IPC authentication required');
   }
@@ -180,6 +182,7 @@ export function validateIPCRequest(
 function handleMessage(
   conn: net.Socket,
   raw: string,
+  expectedToken: string,
   handler: RequestHandler,
   activeAborts: Set<AbortController>,
 ): void {
@@ -190,7 +193,7 @@ function handleMessage(
     return;
   }
   try {
-    validateIPCRequest(msg, readServeState()?.token);
+    validateIPCRequest(msg, expectedToken);
   } catch (err) {
     if (!conn.destroyed) {
       conn.write(JSON.stringify({ id: msg.id, error: err instanceof Error ? err.message : String(err) }) + '\n');
