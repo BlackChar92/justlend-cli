@@ -7,6 +7,14 @@ import { sendContractTx } from '../lib/tx.js';
 import { getTronWeb, validateAddress } from '../lib/tronweb.js';
 import { utils } from '../lib/utils.js';
 import { optionalRead, warningFields } from '../lib/optional-read.js';
+import {
+  DEFAULT_ENERGY_PURCHASE_API_URL,
+  EnergyPurchaseClient,
+  EnergyPurchaseError,
+} from '../lib/energy-purchase.js';
+import { initSigner, resolveSignerTimeout, shutdownSigner } from '../lib/signer.js';
+import { confirmProceed, outputAction, outputInfo, outputList } from '../lib/output.js';
+import { parsePositiveInteger } from '../lib/command-utils.js';
 
 const ENERGY_RESOURCE_TYPE = '1';
 
@@ -155,5 +163,191 @@ export function registerEnergyCommands(program: Command): void {
           stakeAmountTRX: this.opts().stakeAmount ?? '0 (full exit)',
         },
       });
+    });
+
+  const purchase = energy
+    .command('purchase')
+    .description('Energy direct-purchase commands (official production API by default)');
+
+  const makePurchaseClient = (command: Command, withTronWeb = false) => {
+    const opts = command.optsWithGlobals();
+    const network = getNetworkFromCommand(command);
+    const client = new EnergyPurchaseClient({
+      baseUrl: opts.energyApiUrl,
+      tronWeb: withTronWeb ? getTronWeb(network) : undefined,
+      networkFingerprint: withTronWeb ? network : undefined,
+    });
+    if (
+      network !== 'mainnet' &&
+      new URL(client.baseUrl).origin === new URL(DEFAULT_ENERGY_PURCHASE_API_URL).origin
+    ) {
+      throw new EnergyPurchaseError(
+        'CONFIG_MISSING',
+        'The official energy purchase API is mainnet-only. Set JUSTLEND_ENERGY_API_URL or --energy-api-url to a non-mainnet service.',
+      );
+    }
+    return client;
+  };
+
+  purchase.command('config')
+    .description('Show live energy purchase limits and durations')
+    .action(async function (this: Command) {
+      const opts = this.optsWithGlobals();
+      const client = makePurchaseClient(this);
+      const [config, price, pool] = await Promise.all([
+        client.getConfig(),
+        client.getCurrentPrice(),
+        client.getPoolHealth(),
+      ]);
+      outputResult({ apiUrl: client.baseUrl, config, price, pool }, 'Energy Purchase Config', Boolean(opts.json));
+    });
+
+  purchase.command('quote <energy>')
+    .description('Get an authoritative read-only energy purchase quote')
+    .requiredOption('-r, --receiver <address...>', 'One or more energy receiver addresses')
+    .option('--duration <duration>', 'Duration from live config; defaults to its first advertised value')
+    .action(async function (this: Command, energyAmount: string) {
+      const opts = this.optsWithGlobals();
+      const client = makePurchaseClient(this);
+      const config = await client.getConfig();
+      const duration = this.opts().duration || config.supported_durations?.[0];
+      if (!duration) throw new Error('Energy purchase API returned no supported duration.');
+      const quote = await client.quote({
+        receivers: this.opts().receiver,
+        energyPerReceiver: parsePositiveInteger(energyAmount),
+        duration,
+        config,
+      });
+      outputResult(quote, 'Energy Purchase Quote', Boolean(opts.json));
+    });
+
+  purchase.command('order <order-id>')
+    .description('Get an energy purchase order by id')
+    .option('--order-token <token>', 'Optional order access token')
+    .action(async function (this: Command, orderId: string) {
+      const opts = this.optsWithGlobals();
+      const detail = await makePurchaseClient(this).getOrder(orderId, this.opts().orderToken);
+      outputResult(detail, 'Energy Purchase Order', Boolean(opts.json));
+    });
+
+  purchase.command('history <address>')
+    .description('Show energy purchase history for a payer address')
+    .option('--page <number>', 'History page (1-based; used with --size)', parsePositiveInteger, 1)
+    .option('--size <number>', 'Rows per page; omit to request the backend default/all-history view', parsePositiveInteger)
+    .action(async function (this: Command, address: string) {
+      const opts = this.optsWithGlobals();
+      const localOpts = this.opts();
+      const history = await makePurchaseClient(this).getHistory(address, {
+        page: localOpts.page,
+        size: localOpts.size,
+      });
+      const rows = Array.isArray(history.rows) ? history.rows : [];
+      outputList(rows, 'Energy Purchase History', Boolean(opts.json), {
+        address,
+        page: history.page,
+        size: history.size,
+        total: history.total,
+        truncated: history.truncated,
+      });
+    });
+
+  purchase.command('risk <address>')
+    .description('Reconcile and show unresolved energy payment risks for a payer address')
+    .action(async function (this: Command, address: string) {
+      const opts = this.optsWithGlobals();
+      const risks = await makePurchaseClient(this, true).reconcilePaymentRisks(address);
+      const publicRisks = risks.map(risk => ({
+        ...(risk.recoveredOrder && typeof risk.recoveredOrder === 'object'
+          ? (() => {
+              const recovered = risk.recoveredOrder as Record<string, any>;
+              const batch = recovered.batch && typeof recovered.batch === 'object' ? recovered.batch : undefined;
+              return {
+                recoveredOrderId: batch?.id ?? recovered.id,
+                recoveredState: batch?.state ?? recovered.state,
+              };
+            })()
+          : {}),
+        payerAddress: risk.payerAddress,
+        signedTxId: risk.signedTxId,
+        createdAt: risk.createdAt,
+        expiresAt: risk.expiresAt,
+        paymentConfirmed: risk.paymentConfirmed,
+        chainStatus: risk.chainStatus || 'unknown',
+        chainExecution: risk.chainExecution || 'unknown',
+        networkFingerprint: risk.networkFingerprint,
+        replayAvailable: Boolean(risk.signedRequest),
+      }));
+      outputList(publicRisks, 'Energy Payment Risks', Boolean(opts.json), {
+        address,
+        blocked: risks.length > 0,
+        note: risks.length ? 'Do not create another payment until these transactions are reconciled.' : 'No unresolved payment risk.',
+      });
+    });
+
+  purchase.command('buy <energy>')
+    .description('Buy energy; signs a TRX payment locally and lets the backend broadcast it')
+    .requiredOption('-r, --receiver <address...>', 'One or more energy receiver addresses')
+    .option('--duration <duration>', 'Duration from live config; defaults to its first advertised value')
+    .action(async function (this: Command, energyAmount: string) {
+      const opts = this.optsWithGlobals();
+      if (opts.broadcast === false) {
+        throw new Error('energy purchase does not support --no-broadcast. Use --dry-run or the quote command; real purchases are broadcast only by the backend.');
+      }
+      const network = getNetworkFromCommand(this);
+      const energyPerReceiver = parsePositiveInteger(energyAmount);
+      const receivers = this.opts().receiver as string[];
+      const tronWeb = getTronWeb(network);
+      const client = makePurchaseClient(this, true);
+      const config = await client.getConfig();
+      const duration = this.opts().duration || config.supported_durations?.[0];
+      if (!duration) throw new Error('Energy purchase API returned no supported duration.');
+      const quote = await client.quote({ receivers, energyPerReceiver, duration, config });
+
+      if (opts.dryRun) {
+        outputResult({ mode: 'dry-run', ...quote }, 'Energy Purchase Dry Run', Boolean(opts.json));
+        return;
+      }
+
+      const handle = await initSigner(opts.port);
+      try {
+        const connected = await handle.call('connect', { network }, resolveSignerTimeout()) as { address: string };
+        const balanceSun = BigInt(await tronWeb.trx.getBalance(connected.address));
+        if (balanceSun < BigInt(quote.total_sun)) {
+          throw new Error(`Insufficient TRX balance: payment requires ${Number(quote.total_sun) / 1e6} TRX before bandwidth cost.`);
+        }
+        outputAction({
+          action: 'buy energy',
+          network,
+          payer: connected.address,
+          receiverAddresses: receivers.join(', '),
+          energyPerReceiver,
+          duration,
+          paymentTRX: Number(quote.total_sun) / 1e6,
+          paymentReceiver: quote.payment_address,
+          broadcastBy: 'energy purchase backend (the CLI never broadcasts this payment)',
+        });
+        await confirmProceed(
+          `About to sign a ${Number(quote.total_sun) / 1e6} TRX payment from ${connected.address} to ${quote.payment_address} for ${receivers.length} receiver(s). The backend may broadcast it after submission.`,
+          Boolean(opts.yes),
+        );
+        const result = await client.purchase({
+          payerAddress: connected.address,
+          receivers,
+          energyPerReceiver,
+          duration,
+          expectedAmountSun: quote.total_sun,
+          expectedPayAddress: quote.payment_address,
+          onState: state => outputInfo(`Energy purchase: ${state}`),
+          signTransaction: transaction => handle.call('signTransaction', {
+            transaction,
+            network,
+            broadcast: false,
+            confirm: false,
+          }, resolveSignerTimeout()),
+        });
+        outputResult(result, 'Energy Purchase Result', Boolean(opts.json));
+      } finally {
+        if (!handle.isIPC()) await shutdownSigner();
+      }
     });
 }

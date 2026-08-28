@@ -68,17 +68,18 @@ export async function fetchWithTimeout(
   const timeoutSignal = AbortSignal.timeout(timeoutMs);
 
   if (!init?.signal) {
-    return fetch(input, { ...init, signal: timeoutSignal });
+    return fetch(input, { ...init, redirect: init?.redirect ?? 'error', signal: timeoutSignal });
   }
 
   if (typeof AbortSignal.any === "function") {
     return fetch(input, {
       ...init,
+      redirect: init.redirect ?? 'error',
       signal: AbortSignal.any([init.signal, timeoutSignal]),
     });
   }
 
-  return fetch(input, { ...init, signal: timeoutSignal });
+  return fetch(input, { ...init, redirect: init.redirect ?? 'error', signal: timeoutSignal });
 }
 
 function isRetriableError(err: unknown): boolean {

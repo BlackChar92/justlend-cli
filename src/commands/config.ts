@@ -6,6 +6,7 @@ const CONFIG_KEYS = [
   'fullHost',
   'apiHost',
   'moolahApiHost',
+  'energyApiHost',
   'apiKey',
 ] as const;
 
@@ -17,6 +18,7 @@ function envName(key: ConfigKey): string {
     case 'fullHost': return 'JUSTLEND_FULL_HOST';
     case 'apiHost': return 'JUSTLEND_API_HOST';
     case 'moolahApiHost': return 'JUSTLEND_MOOLAH_API_HOST';
+    case 'energyApiHost': return 'JUSTLEND_ENERGY_API_URL';
     case 'apiKey': return 'JUSTLEND_API_KEY';
   }
 }

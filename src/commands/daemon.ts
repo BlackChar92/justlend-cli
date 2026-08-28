@@ -3,7 +3,7 @@ import { TronSigner } from 'tronlink-signer';
 import { acquireServeLock, clearServeState, getServeDir, startIPCServer, writeServeState } from '../lib/ipc.js';
 import { dispatchSignerCall, initSigner, resolveSignerTimeout, shutdownSigner } from '../lib/signer.js';
 import { getNetworkFromCommand } from '../lib/command-utils.js';
-import { outputResult } from '../lib/output.js';
+import { emitJson, outputResult } from '../lib/output.js';
 
 export function registerDaemonCommands(program: Command): void {
   program
@@ -40,14 +40,16 @@ export function registerDaemonCommands(program: Command): void {
       const signer = new TronSigner();
       await signer.start();
       const port = signer.getConfig().httpPort;
-      writeServeState(port);
+      // Keep the authentication authority in daemon memory. serve.json is only
+      // client discovery state and deleting/corrupting it must never disable IPC auth.
+      const ipcToken = writeServeState(port);
 
       // Activity tracking for idle auto-shutdown. A long-running call (e.g. a
       // signature awaiting browser approval) is held open by inFlightRequests,
       // so the daemon never shuts down mid-operation.
       let lastActivityAt = Date.now();
       let inFlightRequests = 0;
-      const server = await startIPCServer(async (method, params, signal) => {
+      const server = await startIPCServer(ipcToken, async (method, params, signal) => {
         lastActivityAt = Date.now();
         inFlightRequests++;
         try {
@@ -59,7 +61,7 @@ export function registerDaemonCommands(program: Command): void {
       });
 
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ status: 'running', pid: process.pid, port, dir: getServeDir() }) + '\n');
+        emitJson({ status: 'running', pid: process.pid, port, dir: getServeDir() });
       } else {
         process.stdout.write(`justlend signer daemon running (pid ${process.pid}, port ${port})\nState: ${getServeDir()}\n`);
       }

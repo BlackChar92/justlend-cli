@@ -1,6 +1,7 @@
 import { Command, InvalidArgumentError } from 'commander';
 import { setJsonMode, setQuietMode, isJsonMode } from './lib/error.js';
 import { configureDiagnostics } from './lib/diagnostics.js';
+import { CLI_VERSION } from './version.js';
 
 import { registerNetworkCommand } from './commands/network.js';
 import { registerPriceCommand } from './commands/price.js';
@@ -26,32 +27,31 @@ import { registerRewardsCommand } from './commands/rewards.js';
 import { registerConfigCommand } from './commands/config.js';
 import { registerStubs } from './commands/_stubs.js';
 
-export function createProgram(): Command {
+export function createProgram(argv: readonly string[] = process.argv.slice(2)): Command {
   const program = new Command();
+  const jsonRequested = argv.includes('--json');
+
+  // Commander reports parser failures before preAction runs. Detect JSON mode
+  // from argv up front, suppress its human stderr, and throw instead of exiting
+  // so bin/cli.ts can emit one valid structured error envelope.
+  setJsonMode(jsonRequested);
+  if (jsonRequested) program.exitOverride();
 
   program.configureOutput({
     writeErr: (str) => {
-      if (isJsonMode()) {
-        const msg = str
-          // eslint-disable-next-line no-control-regex
-          .replace(/\x1b\[[0-9;]*m/g, '')
-          .replace(/^error:\s*/i, '')
-          .trim();
-        process.stderr.write(JSON.stringify({ success: false, error: msg }) + '\n');
-      } else {
-        process.stderr.write(str);
-      }
+      if (!isJsonMode()) process.stderr.write(str);
     },
   });
 
   program
     .name('justlend')
     .description('CLI for JustLend DAO on TRON — V1 + V2 (Moolah) lending, staking, energy rental, governance')
-    .version('1.0.0')
+    .version(CLI_VERSION)
     .option('--network <mainnet|nile>', 'Target network', process.env.JUSTLEND_NETWORK ?? 'mainnet')
     .option('--full-host <url>', 'Override Tron full/solidity/event host (or JUSTLEND_FULL_HOST env)')
     .option('--api-host <url>', 'Override JustLend V1 backend host (or JUSTLEND_API_HOST env)')
     .option('--moolah-api-host <url>', 'Override Moolah V2 backend host (or JUSTLEND_MOOLAH_API_HOST env)')
+    .option('--energy-api-url <url>', 'Override the official energy direct-purchase API URL (or JUSTLEND_ENERGY_API_URL env)')
     .option('--json', 'Output as JSON')
     .option('--local-broadcast', 'Broadcast via CLI local TronWeb instead of signer TronWeb')
     .option('--allow-untrusted-host', 'Allow custom RPC/API hosts outside the built-in allowlist')
@@ -101,6 +101,7 @@ export function createProgram(): Command {
     if (opts.fullHost) process.env.JUSTLEND_FULL_HOST = opts.fullHost;
     if (opts.apiHost) process.env.JUSTLEND_API_HOST = opts.apiHost;
     if (opts.moolahApiHost) process.env.JUSTLEND_MOOLAH_API_HOST = opts.moolahApiHost;
+    if (opts.energyApiUrl) process.env.JUSTLEND_ENERGY_API_URL = opts.energyApiUrl;
     if (opts.apiKey) process.env.JUSTLEND_API_KEY = opts.apiKey;
   });
 

@@ -7,7 +7,7 @@
 [![Protocol: JustLend DAO](https://img.shields.io/badge/Protocol-JustLend_DAO-green)](https://justlend.org/)
 [![CI](https://github.com/justlend/justlend-cli/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/justlend/justlend-cli/actions/workflows/ci.yml)
 
-CLI for [JustLend DAO](https://justlend.org) on TRON. Covers V2 (Moolah) lending, V1 legacy lending, sTRX / stUSDT staking, energy rental, governance, rewards, airdrops, mining reads, historical records, pre-sign transaction prechecks, and safe dry-run simulation.
+CLI for [JustLend DAO](https://justlend.org) on TRON. Covers V2 (Moolah) lending, V1 legacy lending, sTRX / stUSDT staking, energy rental and direct purchase, governance, rewards, airdrops, mining reads, historical records, pre-sign transaction prechecks, and safe dry-run simulation.
 
 > Current status: active CLI implementation with read paths, selected write paths, TronLink signer integration, JSON output, and dry-run simulation. Production/mainnet validation is not required for QA pass criteria; Nile/testnet dry-run is the default safety regression path.
 
@@ -55,7 +55,8 @@ npm run test:smoke:nile
 | `--full-host <url>` | network default | Override Tron RPC host; env: `JUSTLEND_FULL_HOST`. |
 | `--api-host <url>` | network default | Override JustLend V1 backend host; env: `JUSTLEND_API_HOST`. |
 | `--moolah-api-host <url>` | network default | Override V2 Moolah backend host; env: `JUSTLEND_MOOLAH_API_HOST`. |
-| `--json` | off | Machine-readable output: `{success,data}` or `{success:false,error}`. |
+| `--energy-api-url <url>` | official production API | Override the Energy direct-purchase API; env: `JUSTLEND_ENERGY_API_URL`. |
+| `--json` | off | Versioned machine-readable output; success on stdout, one structured error on stderr. |
 | `--local-broadcast` | off | Broadcast via CLI local TronWeb instead of signer TronWeb. |
 | `--no-broadcast` | off | Sign only; return `signedTx` without sending. |
 | `--dry-run` | off | Build calldata and run `triggerconstantcontract` simulation. No signer, no broadcast. |
@@ -97,7 +98,7 @@ wtrx          Wrap native TRX into WTRX or unwrap WTRX back to TRX
 airdrop       V2 airdrop multiClaim commands
 sun           SUN liquidity mining pool commands
 strx          sTRX liquid staking commands
-energy        Energy rental commands
+energy        Energy rental and direct-purchase commands
 gov           Governance commands
 mining        V2 Moolah mining reward commands
 approve       Approve TRC20 token spending
@@ -121,6 +122,51 @@ rewards       V1 mining + V2 airdrop claimable summary
 | 🟡 Remote Write (signs + broadcasts) | `approve` `supply` `withdraw` `borrow` `repay` `collateral` `v1` `stusdt` `wtrx` `sun` `strx` `energy` `gov` `airdrop` `rewards claim` | dry-run first; `--yes` required in `--json`/`--quiet`/non-TTY |
 | 🔴 Destructive / high-risk | `liquidate` | seizes another account's collateral (irreversible); dry-run + explicit `--yes`, never automate without review |
 | ⚙️ Daemon (local) | `serve` | per-session token + `0600/0700` files; same-user only; idle auto-shutdown (`--idle-timeout`, default 10 min) |
+
+### Energy direct purchase
+
+The purchase API is separately deployed. The CLI uses the same official production endpoint as the
+app release by default: `https://tegrow.ablesdxd.link`. Limits, durations, prices, payment address,
+and pool capacity remain live backend data; no economic values are hard-coded. A custom/test endpoint
+requires an explicit URL and the standard untrusted-host opt-in.
+
+```bash
+export JUSTLEND_ENERGY_API_URL="https://energy-api.example" # optional override
+export JUSTLEND_ALLOW_UNTRUSTED_HOSTS=1 # temporary/custom endpoints only
+
+# Read live backend limits, prices, and pool capacity
+justlend energy purchase config
+
+# Read-only authoritative quote
+justlend energy purchase quote 65000 --receiver TReceiverAddress...
+
+# Quote-only dry run: no wallet and no signed transaction
+justlend --dry-run energy purchase buy 65000 --receiver TReceiverAddress...
+
+# Explicit write: prompts before signing; --yes is required for non-TTY/JSON use
+justlend --yes energy purchase buy 65000 --receiver TReceiverAddress...
+
+# Reconcile a payment whose submission result was unknown
+justlend energy purchase risk TPayerAddress...
+
+# Read public purchase history; add --page/--size for server pagination
+justlend energy purchase history TPayerAddress...
+```
+
+The CLI signs a native TRX transfer but **never broadcasts it locally**. The configured energy
+service validates and broadcasts the signed transaction. Ambiguous submissions retry only the same
+signed transaction. For ambiguous submissions, the exact signed request (including the signature and
+raw transaction) is persisted in the local mode-`0600`
+`~/.justlend-cli/energy-payment-risks.json` file. It remains broadcastable until transaction expiry,
+is redacted from normal command output, and is removed only after public purchase history confirms the
+payment/order or the backend deterministically rejects it before broadcast. This prevents a later
+invocation from silently creating a second payment. A per-payer intent lock is also created atomically before signing, so concurrent CLI
+processes cannot authorize two payments. The final authoritative quote must exactly match the amount
+shown at confirmation time. Corrupt or unreadable safety state blocks purchases instead of being
+treated as empty. Risk output distinguishes FullNode `observed`/`included` status from SolidityNode
+`solidified` finality; an RPC error or missing transaction remains unresolved and cannot authorize a
+new signature. `--no-broadcast` is intentionally rejected for this workflow; use `quote` or
+`--dry-run` instead.
 
 ## Safe dry-run examples
 
@@ -209,21 +255,26 @@ Success:
 
 ```json
 {
+  "schemaVersion": "1.0.0",
   "success": true,
   "data": {}
 }
 ```
 
-Failure:
+Failure (written as exactly one JSON object to stderr, including parser/usage failures):
 
 ```json
 {
+  "schemaVersion": "1.0.0",
   "success": false,
-  "error": "message"
+  "error": "unknown command 'example'",
+  "code": "CLI_USAGE_ERROR",
+  "retryable": false,
+  "hint": "Run `justlend --help` or `justlend <command> --help` and correct the arguments."
 }
 ```
 
-Failures may include additional diagnostic fields such as `code`, `module`, `network`, `host`, `path`, `status`, and `hint`.
+The machine-readable JSON Schema is [`schemas/output-v1.schema.json`](./schemas/output-v1.schema.json). Consumers should pin the `schemaVersion` **major**: additive fields may appear within v1, while a removal, rename, or semantic break requires v2. Failures may include diagnostic fields such as `module`, `network`, `host`, `path`, `status`, and `hint`.
 
 ### Error / exit code contract
 
@@ -231,6 +282,7 @@ Branch on the **exit code** first (`0` = success, non-zero = failure), then on t
 
 | `code` | Meaning | Retryable | How to handle |
 |--------|---------|:---:|---------------|
+| `CLI_USAGE_ERROR` | Unknown command, option, or invalid argument | ❌ | Correct arguments using `--help`; never retry unchanged |
 | `USER_CANCELLED` | Rejected/cancelled in TronLink | ❌ | Re-approve in wallet |
 | `SIGNER_TIMEOUT` | TronLink approval timed out | ⚠️ (user must be present) | Retry, approve promptly |
 | `SIGNER_DISCONNECTED` | Signer page closed / IPC dropped | ⚠️ after reconnect | Keep the TronLink signer page open, retry |

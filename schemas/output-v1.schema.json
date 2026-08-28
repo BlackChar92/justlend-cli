@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/justlend/justlend-cli/blob/main/schemas/output-v1.schema.json",
+  "title": "JustLend CLI JSON output v1",
+  "description": "Discriminated success/error envelope emitted by justlend --json. Pin schemaVersion major 1.",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["schemaVersion", "success", "data"],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "const": "1.0.0" },
+        "success": { "const": true },
+        "data": {}
+      }
+    },
+    {
+      "type": "object",
+      "required": ["schemaVersion", "success", "error", "code", "retryable"],
+      "additionalProperties": false,
+      "properties": {
+        "schemaVersion": { "const": "1.0.0" },
+        "success": { "const": false },
+        "error": { "type": "string", "minLength": 1 },
+        "code": { "type": "string", "minLength": 1 },
+        "retryable": { "type": "boolean" },
+        "module": { "type": "string" },
+        "network": { "type": "string" },
+        "host": { "type": "string" },
+        "path": { "type": "string" },
+        "status": { "type": "integer" },
+        "hint": { "type": "string" }
+      }
+    }
+  ]
+}

@@ -1,10 +1,11 @@
-import { MOOLAH_CORE_ABI, MOOLAH_VAULT_ABI, TRC20_ABI } from './abis.js';
+import { MOOLAH_CORE_ABI, MOOLAH_VAULT_ABI } from './abis.js';
 import { getMoolahAddresses, type VaultInfo } from './chains.js';
 import type { TronNetwork } from './types.js';
 import { getTronWeb } from './clients.js';
 import { utils } from './utils.js';
 import { toBase58Address } from './address.js';
 import { formatReadError } from './optional-read.js';
+import { resolveTrc20Decimals } from './tokens.js';
 
 export interface MarketParamsTuple {
   loanToken: string;       // Base58
@@ -12,10 +13,6 @@ export interface MarketParamsTuple {
   oracle: string;          // Base58
   irm: string;             // Base58
   lltv: string;            // decimal string (×1e18)
-}
-
-function decimalFallbackWarning(label: string, fallback: number, error: unknown): string {
-  return `${label} failed: ${formatReadError(error)}; using fallback decimals=${fallback}`;
 }
 
 /** Normalize whatever TronWeb hands back into a Base58 TRON address. */
@@ -43,22 +40,11 @@ export async function getMarketParams(network: TronNetwork, marketId: string): P
   };
 }
 
-export async function tokenDecimals(network: TronNetwork, token: string, fallback = 6): Promise<number> {
-  if (!token) return 6;
-  const contract = getTronWeb(network).contract(TRC20_ABI as any, token) as any;
-  let raw: unknown;
-  try {
-    raw = await contract.methods.decimals().call();
-  } catch (error) {
-    console.warn(decimalFallbackWarning(`tokenDecimals(${token})`, fallback, error));
-    raw = fallback;
-  }
-  const decimals = Number(String(raw));
-  // Bound to a sane TRC20 range [0, 38]; a malformed/malicious token reporting e.g.
-  // 255 would otherwise scale amounts by 10^255. Out-of-range falls back like non-integer.
-  if (Number.isInteger(decimals) && decimals >= 0 && decimals <= 38) return decimals;
-  console.warn(`tokenDecimals(${token}) returned invalid value ${String(raw)}; using fallback decimals=${fallback}`);
-  return fallback;
+export async function tokenDecimals(network: TronNetwork, token: string): Promise<number> {
+  if (!token) throw new Error('Token address is required to resolve decimals.');
+  // Value-moving Moolah paths share the strict [0, 38] resolver used by the
+  // other write commands. RPC failures and malformed results must stop signing.
+  return resolveTrc20Decimals(network, token);
 }
 
 /**
@@ -79,7 +65,7 @@ export async function resolveMoolahSide(network: TronNetwork, marketId: string, 
   const params = await getMarketParams(network, marketId);
   const sideToken = side === 'loan' ? params.loanToken : params.collateralToken;
   const isTrx = sideToken === wtrxProxy;
-  const decimals = isTrx ? 6 : await tokenDecimals(network, sideToken, 6);
+  const decimals = isTrx ? 6 : await tokenDecimals(network, sideToken);
   return { params, decimals, isTrx, sideToken };
 }
 
@@ -121,9 +107,9 @@ export function findVaultByAddress(network: TronNetwork, vaultAddress: string): 
  *   - sharesDecimals:     precision for share amounts (redeem input)
  *   - isTrx:              vault wraps native TRX (use TrxProviderProxy path)
  *
- * For known vaults the data comes from the registry; for unknown vaults we
- * fall back to TRC20 decimals on the underlying asset and 18 decimals for
- * shares (Moolah ERC4626 default, matches MCP behaviour).
+ * For known vaults the data comes from the registry. Unknown vaults must expose
+ * an underlying asset whose decimals can be read and validated; write paths do
+ * not guess precision when either RPC call fails.
  */
 export async function vaultAssetDecimals(network: TronNetwork, vaultAddress: string): Promise<{
   decimals: number;          // alias for underlyingDecimals (back-compat)
@@ -145,8 +131,13 @@ export async function vaultAssetDecimals(network: TronNetwork, vaultAddress: str
   try {
     asset = await vault.methods.asset?.().call?.();
   } catch (error) {
-    console.warn(decimalFallbackWarning(`vaultAssetDecimals(${vaultAddress}).asset`, 6, error));
+    throw new Error(
+      `Unable to resolve the underlying asset for vault ${vaultAddress}: ${formatReadError(error)}`,
+    );
   }
-  const underlyingDecimals = asset ? await tokenDecimals(network, String(asset), 6) : 6;
+  if (asset === undefined || asset === null || String(asset).length === 0) {
+    throw new Error(`Vault ${vaultAddress} returned no underlying asset; refusing to guess decimals.`);
+  }
+  const underlyingDecimals = await tokenDecimals(network, String(asset));
   return { decimals: underlyingDecimals, underlyingDecimals, sharesDecimals: 18, isTrx: false };
 }
