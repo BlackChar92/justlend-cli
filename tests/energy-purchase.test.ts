@@ -389,6 +389,99 @@ describe('energy direct-purchase client', () => {
     }
   });
 
+  it('keeps a recovered intent owned when an expired owner releases concurrently', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'justlend-cli-stale-intent-'));
+    try {
+      const riskFile = path.join(directory, 'risks.json');
+      const oldStore = new FileEnergyPaymentRiskStore(riskFile) as unknown as {
+        acquirePurchaseIntent(payerAddress: string, createdAt: number, expiresAt: number): string;
+        releasePurchaseIntent(payerAddress: string, token: string): void;
+        readIntent(lockPath: string): unknown;
+      };
+      const recoveredStore = new FileEnergyPaymentRiskStore(riskFile);
+      const thirdStore = new FileEnergyPaymentRiskStore(riskFile);
+      const oldToken = oldStore.acquirePurchaseIntent(PAYER, 100, 200);
+      const originalReadIntent = oldStore.readIntent.bind(oldStore);
+      let attemptedRecovery = false;
+
+      oldStore.readIntent = (lockPath: string) => {
+        const snapshot = originalReadIntent(lockPath);
+        if (attemptedRecovery) return snapshot;
+        attemptedRecovery = true;
+        const originalNow = Date.now;
+        let nowCalls = 0;
+        Date.now = (() => (nowCalls++ === 0 ? 0 : 2_001)) as typeof Date.now;
+        try {
+          assert.throws(
+            () => recoveredStore.acquirePurchaseIntent(PAYER, 300, 1000),
+            (error: unknown) => error instanceof EnergyPurchaseError && error.code === 'RISK_STORAGE_BUSY',
+          );
+        } finally {
+          Date.now = originalNow;
+        }
+        return snapshot;
+      };
+
+      oldStore.releasePurchaseIntent(PAYER, oldToken);
+      const recoveredToken = recoveredStore.acquirePurchaseIntent(PAYER, 300, 1000);
+      assert.throws(
+        () => thirdStore.acquirePurchaseIntent(PAYER, 301, 1001),
+        (error: unknown) => error instanceof EnergyPurchaseError && error.code === 'PAYMENT_IN_PROGRESS',
+      );
+      recoveredStore.releasePurchaseIntent(PAYER, recoveredToken);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('serializes stale recovery with signed-risk finalization', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'justlend-cli-finalize-intent-'));
+    try {
+      const riskFile = path.join(directory, 'risks.json');
+      const oldStore = new FileEnergyPaymentRiskStore(riskFile) as unknown as {
+        acquirePurchaseIntent(payerAddress: string, createdAt: number, expiresAt: number): string;
+        finalizePurchaseIntent(payerAddress: string, token: string, risk: EnergyPaymentRisk): void;
+        readIntent(lockPath: string): unknown;
+      };
+      const recoveredStore = new FileEnergyPaymentRiskStore(riskFile);
+      const oldToken = oldStore.acquirePurchaseIntent(PAYER, 100, 200);
+      const originalReadIntent = oldStore.readIntent.bind(oldStore);
+      let attemptedRecovery = false;
+
+      oldStore.readIntent = (lockPath: string) => {
+        const snapshot = originalReadIntent(lockPath);
+        if (attemptedRecovery) return snapshot;
+        attemptedRecovery = true;
+        const originalNow = Date.now;
+        let nowCalls = 0;
+        Date.now = (() => (nowCalls++ === 0 ? 0 : 2_001)) as typeof Date.now;
+        try {
+          assert.throws(
+            () => recoveredStore.acquirePurchaseIntent(PAYER, 300, 1000),
+            (error: unknown) => error instanceof EnergyPurchaseError && error.code === 'RISK_STORAGE_BUSY',
+          );
+        } finally {
+          Date.now = originalNow;
+        }
+        return snapshot;
+      };
+
+      const risk: EnergyPaymentRisk = {
+        payerAddress: PAYER,
+        signedTxId: 'finalized',
+        createdAt: 200,
+        expiresAt: 1000,
+        paymentConfirmed: false,
+      };
+      oldStore.finalizePurchaseIntent(PAYER, oldToken, risk);
+      assert.deepEqual(recoveredStore.list(PAYER), [risk]);
+      const recoveredToken = recoveredStore.acquirePurchaseIntent(PAYER, 300, 1000);
+      recoveredStore.releasePurchaseIntent(PAYER, recoveredToken);
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it('serializes shared risk-file mutations across payer stores', () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'justlend-cli-risk-lock-'));
     try {
