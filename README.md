@@ -13,7 +13,7 @@ CLI for [JustLend DAO](https://justlend.org) on TRON. Covers V2 (Moolah) lending
 
 ## Requirements
 
-- Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`; development and CI use `24.22.1`
+- Recommended: Node.js **24.22.1** (used by development and CI)
 - npm
 - TronLink browser extension + `tronlink-signer` only when signing real write transactions
 - TRON API key is optional; pass `--api-key <key>` or set `JUSTLEND_API_KEY` / `TRON_API_KEY`
