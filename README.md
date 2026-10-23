@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![TRON Network](https://img.shields.io/badge/Network-TRON-red)](https://tron.network/)
-[![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-24.22.1-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Protocol: JustLend DAO](https://img.shields.io/badge/Protocol-JustLend_DAO-green)](https://justlend.org/)
 [![CI](https://github.com/justlend/justlend-cli/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/justlend/justlend-cli/actions/workflows/ci.yml)
@@ -13,7 +13,7 @@ CLI for [JustLend DAO](https://justlend.org) on TRON. Covers V2 (Moolah) lending
 
 ## Requirements
 
-- Node.js >= 20
+- Node.js `^22.23.4 || ^24.22.1 || >=26.12.1`; development and CI use `24.22.1`
 - npm
 - TronLink browser extension + `tronlink-signer` only when signing real write transactions
 - TRON API key is optional; pass `--api-key <key>` or set `JUSTLEND_API_KEY` / `TRON_API_KEY`
@@ -25,6 +25,7 @@ The CLI is not currently published to npm. Install it from source:
 ```bash
 git clone https://github.com/justlend/justlend-cli.git
 cd justlend-cli
+nvm install && nvm use # when using nvm
 npm ci
 npm run build
 npm link
