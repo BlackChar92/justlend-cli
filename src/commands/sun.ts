@@ -45,17 +45,9 @@ interface SunPoolEntry extends Record<string, unknown> {
 }
 
 /**
- * Static SUN mining pool registry — sourced from
- *   /Users/tron/Object/trontech/front-app/src/config.js (`activeSwaps: ['jstlp1']`)
- *
- * front-app currently ships only ONE active LP pool (`jstlp1` — SUNSWAP JST-TRX LP).
- * Older yielder pools and pool/poly aggregators exist in `front-app` but are not
- * MasterChef-style (they don't expose `poolInfo`/`pendingSun`), so we don't list
- * them here — calling `sun info` on them returns empty without crashing, but a
- * `sun list` entry would imply MasterChef semantics they don't have.
- *
- * Reward token for `jstlp1` is JST (`giftKey: ['jst']` in front-app config),
- * not SUN — the command/family name "sun" is historical.
+ * Historical MasterChef-compatible pool registry. Membership is not evidence of
+ * a currently active campaign. Other historical pool ABIs are not represented.
+ * JST is the reward token for jstlp1; the command family name is historical.
  */
 const SUN_POOL_REGISTRY: Record<TronNetwork, SunPoolEntry[]> = {
   [TronNetwork.Mainnet]: [
@@ -63,7 +55,7 @@ const SUN_POOL_REGISTRY: Record<TronNetwork, SunPoolEntry[]> = {
       name: 'jstlp1',
       address: 'TUp1BWfAZidkNbWkoiCjJcf4ctE4PAR2Rg',
       rewardToken: 'JST',
-      description: 'JustLend JST-TRX SUNSWAP LP staking (front-app activeSwaps default)',
+      description: 'JustLend JST-TRX SUNSWAP LP staking (historical registry)',
     },
   ],
   [TronNetwork.Nile]: [
@@ -71,26 +63,22 @@ const SUN_POOL_REGISTRY: Record<TronNetwork, SunPoolEntry[]> = {
       name: 'jstlp1',
       address: 'TMXkqc9RtGa3KB3Sx46bmrdTy9Xgi2cmTu',
       rewardToken: 'JST',
-      description: 'JustLend JST-TRX SUNSWAP LP staking (Nile testnet, front-app activeSwaps default)',
+      description: 'JustLend JST-TRX SUNSWAP LP staking (Nile testnet, historical registry)',
     },
   ],
 };
 
-// JustLend confirmed (2026-05): the only currently-active mining surface is the V1
-// USDD market via the V1 mining reward distributor (read via `rewards summary <address>`).
-// The `sun` MasterChef-style pools registered below — including `jstlp1` — are
-// historical / no longer active in production. The command family is retained for
-// compatibility with legacy scripts and on-chain reads, but is flagged "legacy" in
-// help and runtime output so callers don't mistake `sun claim` for USDD mining.
-const SUN_LEGACY_NOTE = 'SUN pool family is legacy: JustLend\'s only active mining today is V1 USDD market mining — use `rewards summary <address>` to read it and `rewards claim` to claim. `sun deposit/withdraw/claim` is NOT the USDD mining entry.';
+// Keep the legacy command surface without making a time-sensitive claim about
+// which V1/V2 campaigns are active. Query the corresponding live reward APIs.
+const SUN_LEGACY_NOTE = 'SUN pools are legacy, not the V1/V2 mining entry. Use rewards summary <address> for V1 rewards and mining accruing <address> / mining pending <address> for V2. Current activity must come from live API data, not this registry.';
 
 export function registerSunCommands(program: Command): void {
   const sun = program
     .command('sun')
-    .description('[legacy] SUN MasterChef-style LP staking pools — no active pools in production; see `rewards`');
+    .description('[legacy] SUN MasterChef-style LP staking pools — historical registry, not current campaign status; see `rewards`');
 
   sun.command('list')
-    .description('[legacy] List known SUN mining pool contracts (no active pools in production)')
+    .description('[legacy] List known SUN mining pool contracts (historical registry, not current campaign status)')
     .action(async function (this: Command) {
       const opts = this.optsWithGlobals();
       const network = getNetworkFromCommand(this);

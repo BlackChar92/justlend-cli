@@ -1,0 +1,18 @@
+{
+  "source": "App master f408aed2: buy-energy/service.js and service.test.js; synthetic addresses, no live payment data",
+  "config": {
+    "min_energy": 25000,
+    "max_energy": 5000000,
+    "max_receivers": 50,
+    "durations": ["1h"],
+    "presets": [65000, 131000],
+    "activation_fee_sun": 1100000
+  },
+  "quote": {
+    "amount_sun": 2405000,
+    "amount_trx": "2.405",
+    "pay_address": "T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+    "receiver_count": 1
+  },
+  "accepted": { "id": 7, "access_token": "fixture-order-token", "state": "paid" }
+}

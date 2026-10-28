@@ -17,7 +17,7 @@ describe('mining claim informational status', () => {
     registerMiningCommands(program);
     return {
       fetch,
-      run: () => program.parseAsync(['mining', 'claim', 'round', '--address', OWNER], { from: 'user' }),
+      run: (name = 'claim') => program.parseAsync(['mining', name, 'round', '--address', OWNER], { from: 'user' }),
       result: () => JSON.parse(output.join('')).data,
     };
   }
@@ -54,4 +54,15 @@ describe('mining claim informational status', () => {
     await assert.rejects(h.run(), /mainnet-only/);
     assert.equal(h.fetch.mock.callCount(), 0);
   });
+
+  for (const name of ['claim-info', 'claim']) {
+    it(`${name} remains a read-only lookup and identifies the canonical command`, async () => {
+      const h = harness({ round: { claimed: false, proof: [] } });
+      await h.run(name);
+      assert.equal(h.result().transactionSubmitted, false);
+      assert.equal(h.result().canonicalCommand, 'mining claim-info');
+      assert.equal(h.result().deprecatedAlias, name === 'claim');
+      assert.equal(h.fetch.mock.callCount(), 1);
+    });
+  }
 });

@@ -38,7 +38,7 @@ interface V1MiningRewardsSummary {
   markets: MarketMiningRow[];
 }
 
-async function fetchV1MiningRewards(address: string, network: TronNetwork): Promise<V1MiningRewardsSummary | { error: string }> {
+async function fetchV1MiningRewards(address: string, network: TronNetwork): Promise<V1MiningRewardsSummary | { status: 'unavailable'; error: string }> {
   const host = getApiHost(network);
   const url = `${host}/justlend/account?addr=${encodeURIComponent(address)}`;
   try {
@@ -50,13 +50,13 @@ async function fetchV1MiningRewards(address: string, network: TronNetwork): Prom
       hint: `${network} JustLend account backend may be unavailable; retry shortly.`,
     });
     const body = await res.json() as { code?: number; data?: { assetList?: any[] }; message?: string };
-    if (typeof body.code === 'number' && body.code !== 0 && body.code !== 200) {
-      return { error: `API code ${body.code}: ${body.message ?? 'unknown'}` };
+    if (![0, 200, '0', '200'].includes(body.code as any) || !Array.isArray(body.data?.assetList)) {
+      return { status: 'unavailable', error: 'Invalid V1 rewards API response; reward/activity state is unknown.' };
     }
-    const assetList = body.data?.assetList ?? [];
+    const assetList = body.data.assetList;
     return calculateV1MiningRewards(assetList);
   } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
+    return { status: 'unavailable', error: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -152,7 +152,7 @@ export const calculateV1MiningRewardsForTest = calculateV1MiningRewards;
 export function registerRewardsCommand(program: Command): void {
   const rewards = program
     .command('rewards')
-    .description('V1 mining rewards (active USDD rewards for jUSDD and other V1 markets) + V2 airdrop summary');
+    .description('V1 mining rewards (per-market live API data) + V2 airdrop summary');
 
   rewards
     .command('summary <address>')

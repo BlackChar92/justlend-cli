@@ -743,11 +743,12 @@ const JUSTLEND_API_HOSTS: Record<string, string> = {
 };
 
 export function getApiHost(network: string = DEFAULT_NETWORK): string {
+  getNetworkConfig(network); // Validate even when an endpoint override is configured.
   if (process.env.JUSTLEND_API_HOST) return validateTrustedUrl(process.env.JUSTLEND_API_HOST, 'apiHost');
   const n = network.toLowerCase();
   if (n === "mainnet" || n === "tron" || n === "trx") return validateTrustedUrl(JUSTLEND_API_HOSTS.mainnet, 'apiHost');
   if (n === "nile" || n === "testnet") return validateTrustedUrl(JUSTLEND_API_HOSTS.nile, 'apiHost');
-  return validateTrustedUrl(JUSTLEND_API_HOSTS.mainnet, 'apiHost');
+  throw new Error(`Unsupported network: ${network}`);
 }
 
 // ── Moolah V2 helpers ─────────────────────────────────────────────────────────
@@ -765,6 +766,7 @@ const MOOLAH_API_HOSTS: Record<string, string> = {
 };
 
 export function getMoolahApiHost(network: string = DEFAULT_NETWORK): string {
+  getNetworkConfig(network);
   if (process.env.JUSTLEND_MOOLAH_API_HOST) return validateTrustedUrl(process.env.JUSTLEND_MOOLAH_API_HOST, 'moolahApiHost');
   const n = network.toLowerCase();
   if (n === "mainnet" || n === "tron" || n === "trx") return validateTrustedUrl(MOOLAH_API_HOSTS.mainnet, 'moolahApiHost');

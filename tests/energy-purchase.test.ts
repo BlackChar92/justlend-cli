@@ -145,6 +145,19 @@ describe('energy direct-purchase client', () => {
     );
   });
 
+  it('accepts the shared App-master energy fixture without changing the payment wire', async () => {
+    const fixture = JSON.parse(fs.readFileSync(new URL('./fixtures/energy-api-app-master.json', import.meta.url), 'utf8'));
+    const calls: Array<{ url: string; body?: BodyInit | null }> = [];
+    const client = new EnergyPurchaseClient({ fetch: async (url, options) => {
+      calls.push({ url: String(url), body: options?.body });
+      return envelope(String(url).endsWith('/v1/config') ? fixture.config : fixture.quote);
+    } });
+    const result = await client.quote({ receivers: [PAY_ADDRESS], energyPerReceiver: 25000, duration: '1h' });
+    assert.equal(result.total_sun, 2405000);
+    assert.equal(result.payment_address, PAY_ADDRESS);
+    assert.deepEqual(JSON.parse(String(calls.at(-1)?.body)), { receivers: [PAY_ADDRESS], energy_per_receiver: 25000 });
+  });
+
   it('exposes the nested energy purchase command tree', () => {
     const program = createProgram();
     const energy = program.commands.find(command => command.name() === 'energy');

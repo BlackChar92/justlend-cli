@@ -1,7 +1,7 @@
 {
   "name": "@justlend/justlend-cli",
   "version": "1.0.1",
-  "description": "CLI for JustLend DAO on TRON — V1 + V2 (Moolah) lending, sTRX/stUSDT staking, energy rental, governance",
+  "description": "CLI for JustLend on TRON — V1 + V2 (Moolah) lending, sTRX/stUSDT staking, energy rental, governance",
   "type": "module",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",

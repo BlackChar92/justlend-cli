@@ -26,6 +26,7 @@ import { registerAdvancedCommands } from './commands/advanced.js';
 import { registerRewardsCommand } from './commands/rewards.js';
 import { registerConfigCommand } from './commands/config.js';
 import { registerStubs } from './commands/_stubs.js';
+import { registerAlertCommands } from './commands/alerts.js';
 
 export function createProgram(argv: readonly string[] = process.argv.slice(2)): Command {
   const program = new Command();
@@ -45,7 +46,7 @@ export function createProgram(argv: readonly string[] = process.argv.slice(2)): 
 
   program
     .name('justlend')
-    .description('CLI for JustLend DAO on TRON — V1 + V2 (Moolah) lending, staking, energy rental, governance')
+    .description('CLI for JustLend on TRON — V1 + V2 (Moolah) lending, staking, energy rental, governance')
     .version(CLI_VERSION)
     .option('--network <mainnet|nile>', 'Target network', process.env.JUSTLEND_NETWORK ?? 'mainnet')
     .option('--full-host <url>', 'Override Tron full/solidity/event host (or JUSTLEND_FULL_HOST env)')
@@ -128,6 +129,7 @@ export function createProgram(argv: readonly string[] = process.argv.slice(2)): 
   registerMoolahWriteCommands(program);
   registerAdvancedCommands(program);
   registerRewardsCommand(program);
+  registerAlertCommands(program);
 
   // Placeholders that print "not yet implemented (Phase X)" so the help tree is visible
   registerStubs(program);

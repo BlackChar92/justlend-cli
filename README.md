@@ -4,10 +4,10 @@
 [![TRON Network](https://img.shields.io/badge/Network-TRON-red)](https://tron.network/)
 [![Node.js](https://img.shields.io/badge/Node.js-24.22.1-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9.3-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Protocol: JustLend DAO](https://img.shields.io/badge/Protocol-JustLend_DAO-green)](https://justlend.org/)
+[![Protocol: JustLend](https://img.shields.io/badge/Protocol-JustLend-green)](https://justlend.org/)
 [![CI](https://github.com/justlend/justlend-cli/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/justlend/justlend-cli/actions/workflows/ci.yml)
 
-CLI for [JustLend DAO](https://justlend.org) on TRON. Covers V2 (Moolah) lending, V1 legacy lending, sTRX / stUSDT staking, energy rental and direct purchase, governance, rewards, airdrops, mining reads, historical records, pre-sign transaction prechecks, and safe dry-run simulation.
+CLI for [JustLend](https://justlend.org) on TRON. Covers V2 (Moolah) lending, V1 legacy lending, sTRX / stUSDT staking, energy rental and direct purchase, governance, rewards, airdrops, mining reads, historical records, pre-sign transaction prechecks, and safe dry-run simulation.
 
 > Current status: active CLI implementation with read paths, selected write paths, TronLink signer integration, JSON output, and dry-run simulation. Production/mainnet validation is not required for QA pass criteria; Nile/testnet dry-run is the default safety regression path.
 
@@ -299,7 +299,7 @@ backoff). Signing and broadcast paths are **never** auto-retried (double-submit 
 
 ## V2 mining claims
 
-V2 mining backend APIs are mainnet-only. Nile mining commands intentionally return a guard error rather than pretending to succeed. The mainnet V2 distributor is configured, but deployment alone does not mean a reward round is claimable. `mining claim <periodKey>` only reports backend payload status: it does not validate the proof, published root, or on-chain claim status, and never signs or submits a transaction. Preview a round with `airdrop claim --period <periodKey> --address <owner> --dry-run` before deciding to submit it.
+V2 mining backend APIs are mainnet-only. Nile mining commands intentionally return a guard error rather than pretending to succeed. The mainnet V2 distributor is configured, but deployment alone does not mean a reward round is claimable. `mining claim-info <periodKey>` only reports backend payload status: it does not validate the proof, published root, or on-chain claim status, and never signs or submits a transaction. Preview a round with `airdrop claim --period <periodKey> --address <owner> --dry-run` before deciding to submit it.
 
 ## Architecture
 
@@ -325,6 +325,40 @@ Key library modules:
 ## Documentation
 
 - `scripts/nile-dry-run-smoke.sh` — Nile dry-run smoke regression.
+
+## Mining compatibility and deployment policy
+
+`mining claim` remains a deprecated **read-only** alias; its JSON includes
+`canonicalCommand`, `deprecatedAlias`, and `transactionSubmitted: false`.
+SUN registry entries are historical, not proof of active campaigns. Query V1
+`rewards summary` and V2 `mining accruing` / `mining apy` separately; an API failure
+or malformed reward response is unavailable/unknown, not zero rewards or an ended campaign.
+
+Configuration snapshots in `tests/fixtures/deployments.verified.json` separate
+mainnet from the internally linked Nile deployment. ETHB uses on-chain 18 decimals;
+Nile USDT/USDCOLD match their jToken underlying() calls. Do not replace these values
+with another App deployment profile. Unknown networks fail before host overrides.
+CLI default fee limit is 100 TRX, SDK 200 TRX, and MCP's generic fallback 1000 TRX
+(with operation overrides). These are ceilings, not estimated or actual fees;
+inspect dry-run/resource estimates and the explicit transaction budget.
+
+## Risk alerts (read-only)
+
+Configure an explicitly trusted HTTPS `JUSTLEND_ALERT_API_URL` (no implicit host),
+or pass `justlend alerts --api-url <url>` before the subcommand:
+
+```bash
+justlend alerts list <address> --json
+justlend alerts rules --json
+justlend alerts markets <address> --json
+```
+
+Only mainnet TRON public list/rule/market reads are supported. These commands do
+not access the signer, reveal email addresses, or carry device/cookie/session IDs.
+Errors remain errors/unknown; null thresholds remain unavailable, not zero.
+Create/edit/enable/disable/delete and email operations are intentionally absent
+pending a confirmed headless session contract. The signing prefix
+`JustLend DAO Risk Alert` is a protocol invariant, not product display branding.
 
 ## License
 
