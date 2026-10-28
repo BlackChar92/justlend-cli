@@ -304,10 +304,15 @@ export class FileEnergyPaymentRiskStore implements StorageLike {
   private mutateAll(mutator: (risks: EnergyPaymentRisk[]) => EnergyPaymentRisk[]): void {
     const token = this.acquireMutationLock();
     try {
-      this.writeAll(mutator(this.readAll()));
+      this.mutateAllLocked(mutator);
     } finally {
       this.releaseMutationLock(token);
     }
+  }
+
+  /** Apply a risk-file mutation while the caller owns the shared mutation lock. */
+  private mutateAllLocked(mutator: (risks: EnergyPaymentRisk[]) => EnergyPaymentRisk[]): void {
+    this.writeAll(mutator(this.readAll()));
   }
 
   private intentPath(payerAddress: string): string {
@@ -341,8 +346,12 @@ export class FileEnergyPaymentRiskStore implements StorageLike {
 
   acquirePurchaseIntent(payerAddress: string, createdAt: number, expiresAt: number): string {
     const lockPath = this.intentPath(payerAddress);
-    const recoveryPath = `${lockPath}.recovery`;
     const intent: PurchaseIntent = { payerAddress, token: randomUUID(), pid: process.pid, createdAt, expiresAt };
+    // Stale-intent recovery deletes and recreates the payer marker. It must use
+    // the same global critical section as release/finalize, otherwise an old
+    // owner can read its own token, a second process can recover the expired
+    // marker, and the old owner can then unlink the new marker.
+    const mutationToken = this.acquireMutationLock();
     try {
       fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
       try {
@@ -357,46 +366,33 @@ export class FileEnergyPaymentRiskStore implements StorageLike {
         throw new EnergyPurchaseError('PAYMENT_IN_PROGRESS', 'Another energy purchase is already active for this payer.');
       }
 
-      let recoveryDescriptor: number | undefined;
       try {
-        recoveryDescriptor = fs.openSync(
-          recoveryPath,
-          fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
-          0o600,
-        );
-        const refreshed = this.readIntent(lockPath);
-        if (refreshed.expiresAt > createdAt) {
-          throw new EnergyPurchaseError('PAYMENT_IN_PROGRESS', 'Another energy purchase is already active for this payer.');
-        }
         fs.unlinkSync(lockPath);
-        try {
-          this.createIntent(lockPath, intent);
-          return intent.token;
-        } catch (cause) {
-          if (isNodeError(cause, 'EEXIST')) {
-            throw new EnergyPurchaseError('PAYMENT_IN_PROGRESS', 'Another energy purchase is already active for this payer.');
-          }
+      } catch (cause) {
+        if (!isNodeError(cause, 'ENOENT')) {
           throw cause;
         }
+      }
+      try {
+        this.createIntent(lockPath, intent);
+        return intent.token;
       } catch (cause) {
         if (isNodeError(cause, 'EEXIST')) {
-          throw storageError('A stale energy purchase lock is already being recovered; purchases remain blocked.', cause);
+          throw new EnergyPurchaseError('PAYMENT_IN_PROGRESS', 'Another energy purchase is already active for this payer.');
         }
         throw cause;
-      } finally {
-        if (recoveryDescriptor !== undefined) {
-          fs.closeSync(recoveryDescriptor);
-          try { fs.unlinkSync(recoveryPath); } catch { /* A leftover recovery marker keeps recovery fail-closed. */ }
-        }
       }
     } catch (cause) {
       if (cause instanceof EnergyPurchaseError) throw cause;
       throw storageError('Unable to acquire the energy purchase intent lock; purchases are blocked.', cause);
+    } finally {
+      this.releaseMutationLock(mutationToken);
     }
   }
 
   releasePurchaseIntent(payerAddress: string, token: string): void {
     const lockPath = this.intentPath(payerAddress);
+    const mutationToken = this.acquireMutationLock();
     try {
       const current = this.readIntent(lockPath);
       if (current.payerAddress !== payerAddress || current.token !== token) {
@@ -406,20 +402,31 @@ export class FileEnergyPaymentRiskStore implements StorageLike {
     } catch (cause) {
       if (cause instanceof EnergyPurchaseError) throw cause;
       throw storageError('Unable to release the energy purchase intent lock; purchases remain blocked.', cause);
+    } finally {
+      this.releaseMutationLock(mutationToken);
     }
   }
 
   finalizePurchaseIntent(payerAddress: string, token: string, risk: EnergyPaymentRisk): void {
     const lockPath = this.intentPath(payerAddress);
-    const current = this.readIntent(lockPath);
-    if (current.payerAddress !== payerAddress || current.token !== token) {
-      throw storageError('Energy purchase intent lock ownership changed; no payment risk was published.');
-    }
-    this.save(risk);
+    const mutationToken = this.acquireMutationLock();
     try {
-      fs.unlinkSync(lockPath);
-    } catch (cause) {
-      throw storageError('Payment risk was persisted but the purchase intent lock could not be released.', cause);
+      const current = this.readIntent(lockPath);
+      if (current.payerAddress !== payerAddress || current.token !== token) {
+        throw storageError('Energy purchase intent lock ownership changed; no payment risk was published.');
+      }
+      this.mutateAllLocked((risks) => {
+        const remaining = risks.filter(item => !(item.payerAddress === risk.payerAddress && item.signedTxId === risk.signedTxId));
+        remaining.push(risk);
+        return remaining;
+      });
+      try {
+        fs.unlinkSync(lockPath);
+      } catch (cause) {
+        throw storageError('Payment risk was persisted but the purchase intent lock could not be released.', cause);
+      }
+    } finally {
+      this.releaseMutationLock(mutationToken);
     }
   }
 
