@@ -49,9 +49,9 @@ export interface JustLendAddresses {
     multi: string; // Multi-token rewards
   };
   /**
-   * V2 (Moolah) merkle distributor — multi-token leaves claimed via
-   * multiClaim((uint256,uint256,uint256[],bytes32[])[]). Empty string when not
-   * yet deployed on the network (mainnet placeholder until contracts ship).
+   * V2 merkle distributor — multi-token leaves claimed via
+   * multiClaim((uint256,uint256,uint256[],bytes32[])[]). Empty string when a
+   * network has not yet received the deployment.
    */
   merkleDistributorV2: string;
   /** sTRX staking related contracts */
@@ -152,7 +152,7 @@ export const JUSTLEND_ADDRESSES: Record<TronNetwork, JustLendAddresses> = {
       strx: "TKQ5VVJPsoZDD7NqQ8ffhFwzeRp45XLSGt",
       multi: "TUsyCPRyQdMsn9WnJcssBFXtzg6bUVbty6",
     },
-    merkleDistributorV2: "",
+    merkleDistributorV2: "TRiE1tGxBitNAMUazZ6Kk7GA36hpPdzUSL",
     strx: {
       proxy: "TU3kjFuhtEo42tsCBtfYUAZxoqQ4yuSLQ5",
       market: "TU2MJ5Veik1LRAgjeSzEdvmDYx7mefJZvd",

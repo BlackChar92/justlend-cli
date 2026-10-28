@@ -48,7 +48,7 @@ export function registerMiningCommands(program: Command): void {
   });
 
   mining.command('claim <periodKey>')
-    .description('Explain V2 mining claim payload status; mainnet distributor is not deployed/configured yet')
+    .description('Explain V2 mining claim payload status')
     .requiredOption('--address <owner>', 'Owner address used to resolve the period payload')
     .action(async function (this: Command, periodKey: string) {
       const opts = this.optsWithGlobals();
@@ -60,9 +60,13 @@ export function registerMiningCommands(program: Command): void {
       const entry = raw?.[periodKey];
       if (!entry) throw new Error(`Round '${periodKey}' not found for ${owner}`);
       outputResult({
-        status: 'blocked',
-        reason: 'V2 mining pending-period payload schema is confirmed, but mainnet MerkleDistributorV2 contract address is not configured/deployed in front-app/config.js or CLI chains.ts.',
-        nextStep: 'Fill merkleDistributorV2 after mainnet rollout, then reuse the same multiClaim tuple shape as airdrop claim.',
+        status: entry.claimed ? 'claimed' : 'payload_available',
+        reason: entry.claimed
+          ? 'This mining round is already marked claimed by the backend.'
+          : 'The backend returned this round. This informational command does not validate the proof, published root, or on-chain claim status.',
+        claimability: 'not_checked',
+        transactionSubmitted: false,
+        nextStep: entry.claimed ? 'No transaction is required based on the backend status.' : 'Preview with airdrop claim --period <periodKey> --address <owner> --dry-run before submitting a transaction.',
         periodKey,
         merkleIndex: entry.merkleIndex,
         index: entry.index,

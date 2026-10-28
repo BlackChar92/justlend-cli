@@ -297,9 +297,9 @@ Branch on the **exit code** first (`0` = success, non-zero = failure), then on t
 **Retry policy:** only read-only backend calls marked idempotent are auto-retried (2 attempts with
 backoff). Signing and broadcast paths are **never** auto-retried (double-submit risk).
 
-## V2 mining rollout note
+## V2 mining claims
 
-V2 mining backend APIs are mainnet-only. Nile commands intentionally return a guard error rather than pretending to succeed. Mainnet claim is also blocked until the V2 MerkleDistributor address is deployed/configured. This is a safety decision to avoid blind chain writes.
+V2 mining backend APIs are mainnet-only. Nile mining commands intentionally return a guard error rather than pretending to succeed. The mainnet V2 distributor is configured, but deployment alone does not mean a reward round is claimable. `mining claim <periodKey>` only reports backend payload status: it does not validate the proof, published root, or on-chain claim status, and never signs or submits a transaction. Preview a round with `airdrop claim --period <periodKey> --address <owner> --dry-run` before deciding to submit it.
 
 ## Architecture
 

@@ -30,7 +30,7 @@ const asList = (v: string | string[] | undefined): string[] =>
 
 export function registerAirdropCommands(program: Command): void {
   const airdrop = program.command('airdrop')
-    .description('V2 airdrop multiClaim commands (MerkleDistributorV2 — currently nile only; mainnet pending rollout)');
+    .description('V2 airdrop multiClaim commands (MerkleDistributorV2)');
 
   airdrop
     .command('list <address>')

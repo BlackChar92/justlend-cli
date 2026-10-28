@@ -4,6 +4,17 @@ import assert from 'node:assert/strict';
 import { JUSTLEND_ADDRESSES, TronNetwork } from '../src/lib/chains.js';
 
 describe('JustLend market registry parity with mcp-server-justlend', () => {
+  it('keeps the mainnet V2 mining distributor aligned with the app/SDK registry', () => {
+    assert.equal(
+      JUSTLEND_ADDRESSES[TronNetwork.Mainnet].merkleDistributorV2,
+      'TRiE1tGxBitNAMUazZ6Kk7GA36hpPdzUSL',
+    );
+    assert.equal(
+      JUSTLEND_ADDRESSES[TronNetwork.Nile].merkleDistributorV2,
+      'TLSPGyZRYeoZsPX2V9tpGYKF85zFyUAb1u',
+    );
+  });
+
   it('includes the HTX market on mainnet', () => {
     assert.deepEqual(JUSTLEND_ADDRESSES[TronNetwork.Mainnet].jTokens.jHTX, {
       address: 'TDA1mWPyAjTRATMGA55UTswGAHhV2itEXR',
